@@ -97,15 +97,21 @@ class FleetApi {
   Future<Map<String, dynamic>> departStop(String tripId, String stopId) =>
       _post('/trips/$tripId/stops/$stopId/depart', const {});
 
+  /// ⚠ Like [handover], the boarding code is POSTed and compared against a hash
+  /// server-side. It is never held on this device and never comes back in a GET.
   Future<Map<String, dynamic>> board(
     String tripId,
     String childId, {
+    String? method,
+    String? code,
     double? lat,
     double? lng,
     DateTime? clientReportedAt,
     bool offline = false,
   }) =>
       _post('/trips/$tripId/children/$childId/board', {
+        if (method != null) 'method': method,
+        if (code != null) 'code': code,
         ..._pos(lat, lng),
         // ⚠ Sent, never trusted for ordering (PART L4). The server stores it in
         // its own column and orders by server time, so a handset with a wrong

@@ -128,6 +128,16 @@ class Config {
   /// Wrong handover codes before the keypad locks (PART A7 / P3).
   static const int handoverAttempts = 5;
 
+  /// Wrong MORNING BOARDING codes before that keypad locks.
+  ///
+  /// ⚠ Locking here leads somewhere different from the afternoon. A locked
+  /// handover keypad sends the attendant to another verification route and, if
+  /// none works, back to school with the child safely aboard. A locked boarding
+  /// keypad must send them to the photo roster and let the child ON — the bus is
+  /// about to leave and the child is on the pavement. Same number, opposite
+  /// consequence for being wrong.
+  static const int boardingAttempts = 5;
+
   /// Geo-fence radius for "you are at the stop".
   static const int stopGeofenceMetres = 150;
 }

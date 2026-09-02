@@ -75,6 +75,11 @@ class ParentController extends Controller
             // only when there is an afternoon trip to use it on, so we don't
             // rotate a code nobody needs.
             'handoverCode' => $card['show_handover_code'] ? $child->todaysHandoverCode() : null,
+            // PART A7 (extended) — the morning boarding code, read out to the
+            // attendant at the stop. Minted only when there is a morning trip
+            // still to board, for the same reason: never rotate a code nobody
+            // needs, and never mint one that will sit unused on a screen.
+            'boardingCode' => $card['show_boarding_code'] ? $child->todaysBoardingCode() : null,
         ]);
     }
 

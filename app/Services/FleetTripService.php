@@ -308,6 +308,8 @@ class FleetTripService
         ?float $lng = null,
         ?string $clientReportedAt = null,
         bool $offline = false,
+        string $method = 'roster_photo',
+        ?string $code = null,
     ): SchoolTripChild {
         $this->assertMayMarkChildren($staff);
         $this->assertNotLockedBySos($trip);
@@ -320,6 +322,11 @@ class FleetTripService
         // board is not an error, and an attendant fighting a rate limiter is a
         // safety problem — so a second board of an already-boarded child is a
         // no-op that returns the same row.
+        //
+        // ⚠ This returns BEFORE the boarding-code check, deliberately. Asking
+        // for the code a second time because a tap did not visibly register
+        // would have the attendant re-collecting a code from a guardian who has
+        // already walked away.
         if ($row->status === 'boarded') {
             return $row;
         }
@@ -330,11 +337,15 @@ class FleetTripService
             );
         }
 
+        [$verification, $attempts] = $this->verifyBoarding($trip, $row, $method, $code);
+
         $row->forceFill([
             'status' => 'boarded',
             'boarded_at' => now(),
             'boarded_lat' => $lat,
             'boarded_lng' => $lng,
+            'boarding_verification' => $verification,
+            'boarding_code_attempts' => $attempts,
             'acted_by_type' => 'attendant',
             'acted_by_id' => $staff->id,
             // ⚠ Stored, never used for ordering (PART L4). A phone with a wrong
@@ -344,6 +355,117 @@ class FleetTripService
         ])->save();
 
         return $row->refresh();
+    }
+
+    /** Wrong boarding codes before the keypad locks. Mirrors the handover keypad. */
+    public const BOARDING_CODE_ATTEMPTS = 5;
+
+    /**
+     * PART A7 (extended) — verify the morning boarding code.
+     *
+     * Returns [verification_method, failed_attempts] for the trip row.
+     *
+     * ⚠⚠ THIS CHECK NEVER LEAVES A CHILD AT A KERB, AND THAT ASYMMETRY WITH THE
+     * AFTERNOON IS THE WHOLE DESIGN. Read this before making it stricter.
+     *
+     * The afternoon handover code can refuse, because refusing is SAFE there:
+     * the child stays on the bus, the escalation ladder runs, and the fallback
+     * is *Return to school*. The child is never worse off for a failed check.
+     *
+     * The morning is the mirror image. The child is standing at the kerb and the
+     * bus is about to leave. A code that can refuse absolutely is a code that
+     * can strand a seven-year-old on a pavement because their mother's phone is
+     * flat — and it would do so most often to the families least able to absorb
+     * it. That is a bigger risk than the one this code mitigates, and the risk it
+     * mitigates (wrong child, wrong bus) is already covered by the PART F2 photo
+     * roster.
+     *
+     * So the code is ASKED FOR at every morning boarding and it is really
+     * checked — a wrong one is refused and counted, and five wrong ones lock the
+     * keypad exactly as the afternoon does. What differs is where the lock leads:
+     * to the photo-roster fallback, which is recorded as such, rather than to a
+     * child left behind.
+     *
+     * ⚠ The fallback is not a silent bypass. When a code was attempted and
+     * failed and the attendant then boarded on the roster, an ops event is
+     * raised — that is the case somebody should look at, and it is the reason
+     * boarding_verification stores which route was taken rather than a boolean.
+     *
+     * If a school genuinely wants a hard block, add a per-school flag and gate
+     * ONLY the fallback branch on it. Do not remove the fallback outright.
+     */
+    private function verifyBoarding(
+        SchoolTrip $trip,
+        SchoolTripChild $row,
+        string $method,
+        ?string $code,
+    ): array {
+        $child = $row->child;
+
+        if ($method === 'roster_photo') {
+            $failed = $this->codeAttempts($trip, $child->id, 'boarding');
+
+            // Only noisy when it means something: the crew tried the code, it
+            // did not work, and they boarded the child anyway. A school that
+            // does not use boarding codes at all never trips this.
+            if ($failed > 0) {
+                SchoolTripEvent::create([
+                    'trip_id' => $trip->id,
+                    'school_id' => $trip->school_id,
+                    'event_type' => 'boarding_code_bypassed',
+                    // ⚠ 'medium', not 'warning'. SchoolTripEvent::SEVERITY_ORDER
+                    // knows only critical|high|medium|low, and an unrecognised
+                    // value falls to `?? 9` — which would sort this BELOW every
+                    // 'low' row on the Control Tower queue, quietly at the
+                    // bottom of the one list it exists to appear in.
+                    //
+                    // Medium and not high: the child is safely aboard and was
+                    // confirmed against their photo. It wants looking at, not
+                    // interrupting an ops person watching 40 buses.
+                    'severity' => 'medium',
+                    'detail' => $child->name . ' boarded on the photo roster after '
+                        . $failed . ' wrong boarding ' . ($failed === 1 ? 'code' : 'codes') . '.',
+                    'payload' => ['child_id' => $child->id, 'attempts' => $failed],
+                    'started_at' => now(),
+                ]);
+            }
+
+            return ['roster_photo', $failed];
+        }
+
+        if ($method !== 'boarding_code') {
+            throw new FleetDenied('Unknown boarding verification method.');
+        }
+
+        $attempts = $this->codeAttempts($trip, $child->id, 'boarding');
+
+        if ($attempts >= self::BOARDING_CODE_ATTEMPTS) {
+            throw new FleetDenied(
+                'The boarding code is locked after ' . self::BOARDING_CODE_ATTEMPTS
+                . ' wrong attempts. Board ' . $child->name
+                . ' by confirming their photo on the roster instead.',
+                423,
+            );
+        }
+
+        if (! $code || ! $child->verifyBoardingCode($code)) {
+            $this->recordFailedCode($trip, $child->id, 'boarding');
+            $left = self::BOARDING_CODE_ATTEMPTS - ($attempts + 1);
+
+            throw new FleetDenied(
+                $left > 0
+                    ? "That code is wrong · {$left} "
+                      . ($left === 1 ? 'attempt' : 'attempts') . ' left'
+                    : 'The boarding code is locked after ' . self::BOARDING_CODE_ATTEMPTS
+                      . ' wrong attempts. Board ' . $child->name
+                      . ' by confirming their photo on the roster instead.',
+                $left > 0 ? 422 : 423,
+            );
+        }
+
+        $this->clearCodeAttempts($trip, $child->id, 'boarding');
+
+        return ['boarding_code', $attempts];
     }
 
     /** The mis-tap window, in seconds. */
@@ -377,6 +499,14 @@ class FleetTripService
             'boarded_at' => null,
             'boarded_lat' => null,
             'boarded_lng' => null,
+            // The boarding is being withdrawn, so the claim about how it was
+            // verified goes with it. Leaving 'boarding_code' behind on a row
+            // that is back to pending would assert a guardian handed over a
+            // child who, per this very row, never boarded.
+            //
+            // boarding_code_attempts is NOT cleared: the wrong codes really were
+            // entered, and the cache lockout they caused is still in force.
+            'boarding_verification' => null,
             'acted_by_type' => 'attendant',
             'acted_by_id' => $staff->id,
         ])->save();
@@ -1190,25 +1320,40 @@ class FleetTripService
      * follow the code. It is also why a crew member cannot clear a lockout by
      * closing the app.
      */
-    private function codeKey(SchoolTrip $trip, int $childId): string
+    /**
+     * ⚠ The two codes lock out SEPARATELY, and that is the point of $scope.
+     *
+     * Morning boarding and afternoon handover use different codes (see
+     * Child::todaysBoardingCode). Before the morning code existed this key was
+     * keyed by day alone, so sharing it would mean five wrong codes at a 07:15
+     * kerb silently locked that child's 15:30 RELEASE — a family arriving to
+     * collect their child would be refused over something that happened eight
+     * hours earlier on a different code entirely.
+     *
+     * The afternoon key is left byte-for-byte as it was, so no in-flight
+     * handover lockout is reset by deploying this.
+     */
+    private function codeKey(SchoolTrip $trip, int $childId, string $scope = 'handover'): string
     {
-        return "fleet-code-attempts:{$trip->service_date}:{$childId}";
+        return $scope === 'handover'
+            ? "fleet-code-attempts:{$trip->service_date}:{$childId}"
+            : "fleet-{$scope}-code-attempts:{$trip->service_date}:{$childId}";
     }
 
-    private function codeAttempts(SchoolTrip $trip, int $childId): int
+    private function codeAttempts(SchoolTrip $trip, int $childId, string $scope = 'handover'): int
     {
-        return (int) \Cache::get($this->codeKey($trip, $childId), 0);
+        return (int) \Cache::get($this->codeKey($trip, $childId, $scope), 0);
     }
 
-    private function recordFailedCode(SchoolTrip $trip, int $childId): void
+    private function recordFailedCode(SchoolTrip $trip, int $childId, string $scope = 'handover'): void
     {
-        $key = $this->codeKey($trip, $childId);
-        \Cache::put($key, $this->codeAttempts($trip, $childId) + 1, now()->endOfDay());
+        $key = $this->codeKey($trip, $childId, $scope);
+        \Cache::put($key, $this->codeAttempts($trip, $childId, $scope) + 1, now()->endOfDay());
     }
 
-    private function clearCodeAttempts(SchoolTrip $trip, int $childId): void
+    private function clearCodeAttempts(SchoolTrip $trip, int $childId, string $scope = 'handover'): void
     {
-        \Cache::forget($this->codeKey($trip, $childId));
+        \Cache::forget($this->codeKey($trip, $childId, $scope));
     }
 
     /** Metres between two points. Same formula the trip solver falls back on. */

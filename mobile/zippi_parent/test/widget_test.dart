@@ -158,6 +158,30 @@ void main() {
       expect(text.semanticsLabel, 'Handover code 4 7 2 9');
     });
 
+    testWidgets('the boarding code is as legible as the handover code',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: Z.theme(),
+        home: const Scaffold(body: BoardingCodeCard('3081')),
+      ));
+
+      expect(find.text('3081'), findsOneWidget);
+      expect(find.text('BOARDING CODE'), findsOneWidget);
+
+      final text = tester.widget<Text>(find.text('3081'));
+      expect(text.style!.fontSize, greaterThanOrEqualTo(60));
+      expect(text.semanticsLabel, 'Boarding code 3 0 8 1');
+
+      // ⚠ The card says outright that this is not the afternoon number. Two
+      // 4-digit codes from one app on one day is exactly how a parent reads out
+      // the wrong one — and the direction that matters is reading the RELEASE
+      // code aloud at a morning kerb, in front of everyone at the stop.
+      expect(
+        find.textContaining('not the same as the afternoon handover code'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a status chip always carries words, not just colour',
         (tester) async {
       await tester.pumpWidget(MaterialApp(

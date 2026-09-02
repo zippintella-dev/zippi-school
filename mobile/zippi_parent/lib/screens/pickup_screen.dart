@@ -121,11 +121,19 @@ class _PickupScreenState extends State<PickupScreen> with WidgetsBindingObserver
         const SizedBox(height: 16),
       ],
 
-      if (c.handoverCode != null)
+      // ⚠ Exactly one of these, decided by the SERVER from the trip's direction.
+      // The placeholder text has to name the right one too: telling a parent at
+      // a 07:15 kerb that "the code appears once the afternoon trip is under
+      // way" is the sentence that makes them go looking for the wrong number.
+      if (c.boardingCode != null)
+        BoardingCodeCard(c.boardingCode!)
+      else if (c.handoverCode != null)
         HandoverCodeCard(c.handoverCode!)
       else
-        const NoteBanner(
-          'The code appears once the afternoon trip is under way.',
+        NoteBanner(
+          c.showBoardingCode
+              ? 'The boarding code appears once the morning trip is under way.'
+              : 'The code appears once the afternoon trip is under way.',
           label: '',
           tone: ChipTone.live,
         ),

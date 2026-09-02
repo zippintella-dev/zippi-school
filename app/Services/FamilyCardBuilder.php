@@ -100,6 +100,19 @@ class FamilyCardBuilder
             // collected. A code left on screen after handover is just noise.
             'show_handover_code' => (bool) ($trip && ! $trip->isMorning()
                 && ! $terminal && $absence->isEmpty()),
+            // PART A7 (extended) — the MORNING boarding code, and a different
+            // value from the handover code above. Never both at once: the two
+            // conditions are mutually exclusive on isMorning().
+            //
+            // Shown only while the child is still to be picked up. The moment
+            // they board it has done its job, and a live code left on a screen
+            // all day is just a longer window for somebody to read it over a
+            // shoulder. 'pending' is the test rather than !terminal because
+            // 'boarded' is not a terminal status but is exactly when this
+            // should disappear.
+            'show_boarding_code' => (bool) ($trip && $trip->isMorning()
+                && $absence->isEmpty()
+                && (! $row || $row->status === 'pending')),
             'trip' => $trip ? [
                 'id' => $trip->id,
                 'direction' => $trip->direction,

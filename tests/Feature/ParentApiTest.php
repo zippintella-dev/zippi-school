@@ -285,6 +285,50 @@ class ParentApiTest extends TestCase
         $this->assertNull($after['handover_code']);
     }
 
+    /**
+     * PART A7 (extended) — the morning boarding code, which the guardian reads
+     * out to the attendant at the stop.
+     *
+     * ⚠ It disappears the moment the child boards. The map does NOT close in the
+     * morning at that point (it stays open until they are inside the school), so
+     * nothing else would have taken this off the screen — a used code would
+     * otherwise sit there all morning for anyone to read over a shoulder.
+     */
+    public function test_the_boarding_code_appears_only_before_a_morning_boarding(): void
+    {
+        $today = Carbon::now('Asia/Kolkata')->toDateString();
+
+        $row = SchoolTripChild::where('child_id', $this->child->id)
+            ->whereHas('trip', fn ($q) => $q->where('service_date', $today)
+                                             ->where('direction', 'Morning'))
+            ->firstOrFail();
+
+        $row->trip->update(['status' => 'started']);
+        $row->update(['status' => 'pending']);
+
+        $body = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        $this->assertTrue($body['show_boarding_code']);
+        $this->assertMatchesRegularExpression('/^\d{4}$/', $body['boarding_code']);
+
+        // ⚠ Never both at once. The morning card must not carry the afternoon
+        // release code: showing it here would put the code that protects the
+        // drop stop on a screen at a public kerb hours before it is needed.
+        $this->assertFalse($body['show_handover_code']);
+        $this->assertNull($body['handover_code']);
+
+        $row->update(['status' => 'boarded', 'boarded_at' => now()]);
+
+        $after = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        $this->assertFalse($after['show_boarding_code']);
+        $this->assertNull($after['boarding_code']);
+    }
+
     /** ⚠ Enterprise L29 — a closed map ships no coordinates at all. */
     public function test_the_bus_position_is_absent_once_the_map_closes(): void
     {

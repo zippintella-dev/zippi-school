@@ -238,6 +238,15 @@ class FleetApiController extends Controller
         $this->fleet->authorizeTrip($trip, $staff);
 
         $data = $request->validate([
+            // PART A7 (extended) — how the morning boarding was verified.
+            //
+            // Defaults to roster_photo rather than boarding_code so an older
+            // build of the Fleet app, which knows nothing about this, keeps
+            // boarding children instead of failing every tap at a kerb. The
+            // server still records honestly which route was taken.
+            'method' => ['nullable', 'in:boarding_code,roster_photo'],
+            // ⚠ Never logged and never echoed back. It is a live code.
+            'code' => ['nullable', 'string', 'max:8'],
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'client_reported_at' => ['nullable', 'date'],
@@ -251,7 +260,14 @@ class FleetApiController extends Controller
                 $data['longitude'] ?? null,
                 $data['client_reported_at'] ?? null,
                 (bool) ($data['offline'] ?? false),
+                $data['method'] ?? 'roster_photo',
+                $data['code'] ?? null,
             )
+            // ⚠ Afternoon boarding is at the SCHOOL GATE, not at a kerb, and
+            // takes no code. The child is being collected by the institution
+            // that already has custody of them; there is no third party whose
+            // identity a code would establish. The afternoon's code is the
+            // handover at the far end, which is a different check entirely.
             : $this->fleet->boardAtSchool($trip, $child, $staff);
 
         return $this->show($request, $trip);
@@ -616,6 +632,14 @@ class FleetApiController extends Controller
                 ? 'Parent collecting'
                 : $row->statusLabel(),
             'boarded_at' => $row->boarded_at?->toIso8601String(),
+            // PART A7 (extended) — HOW the morning boarding was verified:
+            // boarding_code | roster_photo, or null on a row that predates the
+            // boarding code or has not boarded.
+            //
+            // ⚠ This is the METHOD, never the code. The code itself does not
+            // appear in any GET payload — the device posts what was typed and
+            // the server compares it against a hash it never sends out.
+            'boarding_verification' => $row->boarding_verification,
             'alighted_at' => $row->alighted_at?->toIso8601String(),
             'escalation_started_at' => $row->escalation_started_at?->toIso8601String(),
             'note' => $absence?->reason,

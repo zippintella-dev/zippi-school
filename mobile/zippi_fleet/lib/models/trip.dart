@@ -57,6 +57,37 @@ enum ChildState {
       };
 }
 
+/// How a child was verified when they BOARDED in the morning (PART A7 extended).
+///
+/// ⚠ Not the same thing as [HandoverMethod], and not the same code. The morning
+/// boarding code is read aloud at a public kerb; the afternoon handover code is
+/// what stands between a child and a stranger. They are separate values on the
+/// server precisely so that saying one out loud does not leak the other.
+///
+/// ⚠ [rosterPhoto] is a real, recorded outcome — not a failure and not a bypass.
+/// A morning check that could refuse absolutely would strand a child on a
+/// pavement because a parent's phone was flat, which is worse than the risk the
+/// code addresses. The server records which of these two was used.
+enum BoardingMethod {
+  /// The 4-digit boarding code from the guardian's Parent app.
+  code,
+
+  /// PART F2 — the attendant confirmed the child against their photo, class and
+  /// distinguishing detail on the roster. What every morning boarding relied on
+  /// before the code existed, and still the floor beneath it.
+  rosterPhoto;
+
+  String get wire => switch (this) {
+        BoardingMethod.code => 'boarding_code',
+        BoardingMethod.rosterPhoto => 'roster_photo',
+      };
+
+  String get label => switch (this) {
+        BoardingMethod.code => 'Boarding code verified',
+        BoardingMethod.rosterPhoto => 'Photo roster confirmed',
+      };
+}
+
 /// How a child was released at a drop stop.
 ///
 /// ⚠ These three are the whole of Invariant #1. There is no fourth.
@@ -157,6 +188,13 @@ class TripChild {
   /// Server time of the last state change. Drives the 90-second undo window.
   DateTime? stateChangedAt;
 
+  /// PART A7 (extended) — how this child's MORNING boarding was verified.
+  ///
+  /// Null until they board, and null again if the boarding is undone: a row
+  /// back at `expected` carrying 'code' would assert a guardian handed over a
+  /// child who, by that same row, never got on.
+  BoardingMethod? boardingMethod;
+
   Handover? handover;
 
   /// Why this child is absent or is not travelling — set by the office or by
@@ -196,6 +234,7 @@ class TripChild {
     this.photoUrl,
     this.state = ChildState.expected,
     this.stateChangedAt,
+    this.boardingMethod,
     this.handover,
     this.note,
     this.maySelfRelease = false,
@@ -224,6 +263,7 @@ class TripChild {
       photoUrl: json['photo_url'] as String?,
       state: _state(json['status'] as String?),
       stateChangedAt: _dt(json['boarded_at']) ?? _dt(json['alighted_at']),
+      boardingMethod: _boardingMethod(json['boarding_verification'] as String?),
       note: json['note'] as String?,
       medicalNotes: json['medical_notes'] as String?,
       maySelfRelease: json['may_self_release'] == true,
@@ -254,6 +294,16 @@ class TripChild {
         // build that predates a new server state must fail towards "this child
         // still needs attention".
         _ => ChildState.expected,
+      };
+
+  /// ⚠ An unrecognised or absent value stays NULL rather than defaulting to
+  /// rosterPhoto. Null means "this row does not say", which is the truth for
+  /// rows written before boarding codes existed. Defaulting would have the app
+  /// assert a verification that never happened.
+  static BoardingMethod? _boardingMethod(String? raw) => switch (raw) {
+        'boarding_code' => BoardingMethod.code,
+        'roster_photo' => BoardingMethod.rosterPhoto,
+        _ => null,
       };
 
   static DateTime? _dt(Object? raw) =>

@@ -26,6 +26,16 @@ class FamilyCard {
   /// decided a code is warranted (PART A7).
   final String? handoverCode;
 
+  /// PART A7 (extended) — the MORNING boarding code, read out as the child gets
+  /// on the bus.
+  ///
+  /// ⚠ Never non-null at the same time as [handoverCode]. The server sets one or
+  /// the other from the trip's direction, and the app must not invent a state
+  /// where a parent is looking at both — the afternoon release code has no
+  /// business being on a screen at a morning kerb.
+  final bool showBoardingCode;
+  final String? boardingCode;
+
   final TripInfo? trip;
   final StopInfo? stop;
   final List<TimelineEvent> timeline;
@@ -46,6 +56,8 @@ class FamilyCard {
     required this.absentDirections,
     required this.showHandoverCode,
     required this.handoverCode,
+    required this.showBoardingCode,
+    required this.boardingCode,
     required this.trip,
     required this.stop,
     required this.timeline,
@@ -68,6 +80,8 @@ class FamilyCard {
             (j['absent_directions'] as List?)?.map((e) => '$e').toList() ?? const [],
         showHandoverCode: j['show_handover_code'] == true,
         handoverCode: j['handover_code'] as String?,
+        showBoardingCode: j['show_boarding_code'] == true,
+        boardingCode: j['boarding_code'] as String?,
         trip: j['trip'] == null
             ? null
             : TripInfo.fromJson(j['trip'] as Map<String, dynamic>),

@@ -205,6 +205,40 @@ The DB stores only a hash; the plaintext lives in the cache for the day so the
 parent can read it out at the kerb. Rotates daily. Never goes in an ops payload
 or a push body (K9).
 
+### ⚠ Morning boarding code (PART A7 extended) — the ADD, not the move
+
+Built 2026-09-02. The attendant asks the guardian for a boarding code as each
+child gets on in the morning. The afternoon handover code above is **unchanged
+and still where it was**.
+
+**It is a second, separate value.** `Child::todaysBoardingCode()` has its own
+hash, own column (`boarding_code_hash`/`boarding_code_date`), own daily rotation
+and own cache key. Merging the two would be less schema and a worse system: the
+morning code is read aloud at a public kerb every day in front of the other
+families, so a shared value would broadcast that afternoon's *release* code to
+everyone within earshot. `FleetApiTest::test_the_boarding_code_is_not_the_handover_code`
+holds the line.
+
+**The two keypads lock out separately.** The attempt counter was keyed by day
+alone; it now takes a `$scope`. Sharing it meant five wrong codes at a 07:15
+kerb silently locked that child's 15:30 *release*.
+
+⚠ **The morning check never blocks boarding, and that asymmetry is the design.**
+Refusing is safe in the afternoon — the child stays on the bus and the ladder
+runs. In the morning the child is on the pavement and the bus is leaving, so a
+check that could refuse absolutely would strand a child over a flat phone
+battery. `FleetTripService::verifyBoarding()` therefore always leaves the
+PART F2 photo-roster route open, `school_trip_children.boarding_verification`
+records which was used, and a `boarding_code_bypassed` event fires when a code
+was tried, failed, and the child boarded anyway. If a school wants a hard block,
+gate **only the fallback branch** on a per-school flag — do not delete it.
+`test_a_locked_boarding_keypad_still_lets_the_child_board` is the one that must
+never stop passing.
+
+Parent side: `show_boarding_code` on the family card, mutually exclusive with
+`show_handover_code`. It disappears the moment the child boards — the morning map
+stays open until they reach school, so nothing else would clear it.
+
 **OTP** (`OtpService`, PART P1–P4): `random_int(1000,9999)`, hashed, 10-min TTL,
 5 wrong tries → 1-min lockout, 3 sends per 2 min, and issuing a new code
 consumes the old one. **No static 1234 anywhere** — in local the code is logged

@@ -64,6 +64,13 @@ class ParentApiController extends Controller
             ? $model->todaysHandoverCode()
             : null;
 
+        // PART A7 (extended) — the morning boarding code. Same minting rule, and
+        // the two are never both non-null: show_handover_code and
+        // show_boarding_code are mutually exclusive on the trip's direction.
+        $card['boarding_code'] = $card['show_boarding_code']
+            ? $model->todaysBoardingCode()
+            : null;
+
         return response()->json(['status' => true, 'child' => $card]);
     }
 

@@ -203,11 +203,66 @@ void main() {
     expect(find.text('Not at stop'), findsNothing);
     expect(find.textContaining('"Not at stop" unlocks in'), findsOneWidget);
 
+    // PART A7 (extended) — the tap now asks for the boarding code rather than
+    // boarding on the tap alone.
     await tester.tap(find.text('Aarav Mehta'));
-    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Boarding Aarav Mehta'), findsOneWidget);
+    expect(
+      find.textContaining('Ask the guardian for the 4-digit boarding code'),
+      findsOneWidget,
+    );
+
+    // ⚠ The roster line stays on screen behind the keypad. It is the check that
+    // actually catches a wrong child, and the code sits on top of it rather
+    // than replacing it.
+    expect(find.text('Class 3B · Blue name tag'), findsWidgets);
+
+    // Four digits. The fourth submits — there is no separate confirm button,
+    // because a crew member holding a phone in one hand at a kerb should not
+    // have to find one.
+    for (final d in ['1', '2', '3', '4']) {
+      await tester.tap(find.text(d));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
 
     expect(find.textContaining('Boarded'), findsOneWidget);
     expect(find.textContaining('Undo'), findsOneWidget);
+  });
+
+  /// ⚠ THE MOST IMPORTANT TEST ON THIS SCREEN.
+  ///
+  /// A guardian with a flat phone has no code to give. If the only way past the
+  /// keypad were a correct code, this app would leave a child on a pavement — a
+  /// worse outcome than the mis-boarding the code exists to prevent, and one
+  /// that would land hardest on the families least able to absorb it.
+  ///
+  /// The fallback is reachable on the FIRST attempt, not only after the lockout.
+  testWidgets('6c · At stop — a child with no code still boards',
+      (tester) async {
+    final store = attendantStore();
+    store.reachStop('stop-kbr');
+
+    await pumpScreen(tester, store, const AtStopScreen(stopId: 'stop-kbr'));
+
+    await tester.tap(find.text('Aarav Mehta'));
+    await tester.pumpAndSettle();
+
+    // Offered immediately — no wrong digits required to reach it.
+    final fallback = find.textContaining('board Aarav on the photo roster');
+    expect(fallback, findsOneWidget);
+
+    await tester.tap(fallback);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Boarded'), findsOneWidget);
+    expect(
+      store.session!.childById('c12')?.boardingMethod,
+      BoardingMethod.rosterPhoto,
+      reason: 'The fallback must be recorded as such, not left blank.',
+    );
   });
 
   testWidgets('6b · At stop — wait expired unlocks "Not at stop"',

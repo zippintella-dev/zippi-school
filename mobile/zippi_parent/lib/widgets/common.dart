@@ -386,6 +386,54 @@ class HandoverCodeCard extends StatelessWidget {
   const HandoverCodeCard(this.code, {super.key});
 
   @override
+  Widget build(BuildContext context) => _CodeCard(
+        code: code,
+        title: 'HANDOVER CODE',
+        spokenName: 'Handover code',
+        note: 'Show or read this to the bus attendant at the stop. '
+            'It changes every day.',
+      );
+}
+
+/// PART A7 (extended) — the MORNING boarding code.
+///
+/// ⚠ A different number from [HandoverCodeCard] and never on screen at the same
+/// time: the server sets exactly one of show_boarding_code / show_handover_code,
+/// on the trip's direction.
+///
+/// The note says so explicitly. Two 4-digit codes from the same app on the same
+/// day is precisely the situation where a parent reads out the wrong one, and
+/// the failure mode that matters is reading the AFTERNOON code aloud at a
+/// morning kerb — which would hand the release code to everyone at the stop.
+class BoardingCodeCard extends StatelessWidget {
+  final String code;
+
+  const BoardingCodeCard(this.code, {super.key});
+
+  @override
+  Widget build(BuildContext context) => _CodeCard(
+        code: code,
+        title: 'BOARDING CODE',
+        spokenName: 'Boarding code',
+        note: 'Read this to the attendant as your child boards. It changes '
+            'every day, and is not the same as the afternoon handover code.',
+      );
+}
+
+class _CodeCard extends StatelessWidget {
+  final String code;
+  final String title;
+  final String spokenName;
+  final String note;
+
+  const _CodeCard({
+    required this.code,
+    required this.title,
+    required this.spokenName,
+    required this.note,
+  });
+
+  @override
   Widget build(BuildContext context) {
     return ZCard(
       borderColor: Z.coral,
@@ -394,7 +442,7 @@ class HandoverCodeCard extends StatelessWidget {
       child: Column(
         children: [
           Text(
-            'HANDOVER CODE',
+            title,
             style: Z.text(13, color: Z.coralText, weight: FontWeight.w800)
                 .copyWith(letterSpacing: 2),
           ),
@@ -403,7 +451,9 @@ class HandoverCodeCard extends StatelessWidget {
             fit: BoxFit.scaleDown,
             child: Text(
               code,
-              semanticsLabel: 'Handover code ${code.split('').join(' ')}',
+              // ⚠ Digit by digit. A screen reader saying "one thousand two
+              // hundred and thirty four" is not a code anyone can read out.
+              semanticsLabel: '$spokenName ${code.split('').join(' ')}',
               style: Z.head(84, height: 1.1).copyWith(
                 letterSpacing: 14,
                 fontFeatures: const [FontFeature.tabularFigures()],
@@ -412,8 +462,7 @@ class HandoverCodeCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Show or read this to the bus attendant at the stop. '
-            'It changes every day.',
+            note,
             textAlign: TextAlign.center,
             style: Z.text(14, color: Z.muted),
           ),

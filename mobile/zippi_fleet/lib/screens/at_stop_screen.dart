@@ -6,6 +6,7 @@ import '../models/trip.dart';
 import '../services/fleet_scope.dart';
 import '../theme.dart';
 import '../widgets/blocked_sheet.dart';
+import '../widgets/boarding_code_sheet.dart';
 import '../widgets/stop_missing.dart';
 import '../widgets/common.dart';
 import '../widgets/offline_banner.dart';
@@ -218,12 +219,22 @@ class _ChildRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(Z.rRow),
           onTap: canTap
               ? () {
-                  // A short buzz per child, BEFORE the round trip. Twenty-two
-                  // of them in ninety seconds is how an attendant knows a tap
+                  // A short buzz per child, BEFORE anything else. Twenty-two of
+                  // them in ninety seconds is how an attendant knows a tap
                   // registered without stopping to look; waiting for the server
                   // to buzz would make the app feel broken at a kerb.
                   HapticFeedback.selectionClick();
-                  runGuarded(context, () => store.markBoarded(child.id));
+
+                  // PART A7 (extended) — the boarding code is asked for here
+                  // rather than boarding on the tap alone.
+                  //
+                  // ⚠ The sheet ALWAYS offers the photo-roster route, so this
+                  // added step can never leave a child on the pavement because
+                  // a guardian's phone is flat. It also owns the whole error
+                  // path, which is why nothing here is wrapped in runGuarded:
+                  // a refusal belongs on the keypad next to the digits that
+                  // caused it, not in a sheet that covers it.
+                  showBoardingCodeSheet(context, store, child);
                 }
               : null,
           child: Container(

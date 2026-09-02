@@ -687,7 +687,23 @@ class FleetStore extends ChangeNotifier {
 
   /* ---------------- 6 · marking children ---------------- */
 
-  Future<void> markBoarded(String childId) async {
+  /// PART A7 (extended) — [method] says how the guardian was verified at the
+  /// kerb, and [code] carries the 4 digits when it was the boarding code.
+  ///
+  /// ⚠ THE CODE IS SENT, NOT COMPARED HERE. The server holds the hash and counts
+  /// the attempts. A plaintext comparison in an app is a formality that anyone
+  /// with the APK skips, and the whole point of the check is that it holds
+  /// against a phone running a build from March.
+  ///
+  /// ⚠ Defaults to [BoardingMethod.rosterPhoto] rather than requiring a code.
+  /// A morning boarding must never be blocked by this layer — see the long note
+  /// on FleetTripService::verifyBoarding for why refusing at a kerb in the
+  /// morning is not the safe direction to be wrong.
+  Future<void> markBoarded(
+    String childId, {
+    BoardingMethod method = BoardingMethod.rosterPhoto,
+    String? code,
+  }) async {
     _guardRole();
     _guardSos();
 
@@ -697,6 +713,7 @@ class FleetStore extends ChangeNotifier {
 
     if (!isLive) {
       child.state = ChildState.boarded;
+      child.boardingMethod = method;
       child.stateChangedAt = DateTime.now();
       notifyListeners();
       return;
@@ -708,6 +725,7 @@ class FleetStore extends ChangeNotifier {
     // said no is a child the attendant believes is aboard and who is not, so
     // the catch below is not optional.
     child.state = ChildState.boarded;
+    child.boardingMethod = method;
     child.stateChangedAt = DateTime.now();
     notifyListeners();
 
@@ -715,16 +733,20 @@ class FleetStore extends ChangeNotifier {
       _applyTrip(await api!.board(
         s.trip.id,
         childId,
+        method: method.wire,
+        code: code,
         clientReportedAt: DateTime.now(),
         offline: offline,
       ));
     } on SafetyViolation {
       child.state = ChildState.expected;
+      child.boardingMethod = null;
       child.stateChangedAt = null;
       notifyListeners();
       rethrow;
     } on FleetTransportException catch (e) {
       child.state = ChildState.expected;
+      child.boardingMethod = null;
       child.stateChangedAt = null;
 
       if (e.isOffline) {
@@ -765,6 +787,7 @@ class FleetStore extends ChangeNotifier {
 
     if (!isLive) {
       child.state = ChildState.expected;
+      child.boardingMethod = null;
       child.stateChangedAt = null;
       notifyListeners();
       return;

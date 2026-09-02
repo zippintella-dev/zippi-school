@@ -15,11 +15,12 @@ class Child extends Model
 {
     protected $guarded = [];
 
-    protected $hidden = ['handover_code_hash'];
+    protected $hidden = ['handover_code_hash', 'boarding_code_hash'];
 
     protected $casts = [
         'self_release_consent' => 'boolean',
-        // 'handover_code_date' / date_of_birth stay raw strings (PART L1)
+        // 'handover_code_date' / 'boarding_code_date' / date_of_birth stay raw
+        // strings (PART L1)
     ];
 
     public function school(): BelongsTo { return $this->belongsTo(School::class); }
@@ -95,6 +96,57 @@ class Child extends Model
     {
         return $this->handover_code_hash
             && \Hash::check($code, $this->handover_code_hash);
+    }
+
+    /**
+     * PART A7 (extended) — the day's MORNING BOARDING code.
+     *
+     * ⚠ A DIFFERENT VALUE FROM todaysHandoverCode(), deliberately, and the two
+     * must never be merged into one.
+     *
+     * This code is read aloud at a public kerb every morning, in front of the
+     * other families waiting at that stop. The handover code is the receiver
+     * verification behind Invariant #1 — the one thing between a child and a
+     * stranger at the afternoon drop. If they were the same value, every morning
+     * boarding would broadcast that afternoon's release code to everyone within
+     * earshot.
+     *
+     * Same storage shape as the handover code otherwise: hash in the database,
+     * plaintext in the cache for the day so the guardian can actually read it,
+     * rotating daily. Reissued together if the cache is cleared mid-day, so the
+     * attendant's check and the parent's screen never disagree.
+     *
+     * ⚠ PART L1: boarding_code_date is a DATE column and stays a raw Y-m-d string.
+     * ⚠ PART K9: never put this in an ops-facing payload or a push body.
+     */
+    public function todaysBoardingCode(): string
+    {
+        $today = \Carbon\Carbon::now($this->school?->timezone ?: config('app.timezone'))
+            ->toDateString();
+
+        $key = "boarding-code:{$this->id}:{$today}";
+
+        if ($this->boarding_code_date === $today && ($cached = \Cache::get($key))) {
+            return $cached;
+        }
+
+        $code = (string) random_int(1000, 9999);      // PART P1 — never static
+
+        $this->forceFill([
+            'boarding_code_hash' => \Hash::make($code),
+            'boarding_code_date' => $today,           // raw string (L1)
+        ])->save();
+
+        \Cache::put($key, $code, \Carbon\Carbon::parse($today . ' 23:59:59'));
+
+        return $code;
+    }
+
+    /** What the attendant's app calls to check a boarding code at the stop. */
+    public function verifyBoardingCode(string $code): bool
+    {
+        return $this->boarding_code_hash
+            && \Hash::check($code, $this->boarding_code_hash);
     }
 
     /**

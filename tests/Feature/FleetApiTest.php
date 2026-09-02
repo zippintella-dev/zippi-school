@@ -750,4 +750,218 @@ class FleetApiTest extends TestCase
         $this->assertStringNotContainsString($this->driver->phone, $body);
         $this->assertStringContainsString('phone_masked', $body);
     }
+
+    /* ================================================================= */
+    /* PART A7 (extended) · the MORNING boarding code                     */
+    /* ================================================================= */
+
+    public function test_a_correct_boarding_code_boards_the_child(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+        $code = $row->child->todaysBoardingCode();
+
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board", [
+            'method' => 'boarding_code',
+            'code' => $code,
+        ])->assertOk();
+
+        $row->refresh();
+        $this->assertSame('boarded', $row->status);
+        $this->assertSame('boarding_code', $row->boarding_verification);
+    }
+
+    public function test_a_wrong_boarding_code_is_refused_and_counted(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+        $wrong = $row->child->todaysBoardingCode() === '1111' ? '2222' : '1111';
+
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board", [
+            'method' => 'boarding_code',
+            'code' => $wrong,
+        ])->assertStatus(422);
+
+        $this->assertSame('pending', $row->refresh()->status,
+            'A refused code must not board the child.');
+    }
+
+    /**
+     * ⚠ THE MORNING CODE IS NOT THE AFTERNOON CODE, and this is the test that
+     * says so.
+     *
+     * The boarding code is read aloud at a public kerb every morning, in front
+     * of the other families at that stop. If the two were one value, every
+     * morning boarding would broadcast that afternoon's RELEASE code — the
+     * check that stands between a child and a stranger under Invariant #1.
+     */
+    public function test_the_boarding_code_is_not_the_handover_code(): void
+    {
+        $child = $this->firstPending($this->morning)->child;
+
+        $boarding = $child->todaysBoardingCode();
+        $handover = $child->todaysHandoverCode();
+
+        $this->assertNotSame($boarding, $handover,
+            'The kerb-side boarding code must never equal the release code.');
+
+        $child->refresh();
+        $this->assertFalse($child->verifyHandoverCode($boarding),
+            'The boarding code must not open an afternoon handover.');
+        $this->assertFalse($child->verifyBoardingCode($handover),
+            'The handover code must not board a child.');
+    }
+
+    /**
+     * ⚠ The two keypads lock out separately.
+     *
+     * Before the morning code existed the attempt counter was keyed by day
+     * alone. Sharing it would mean five wrong codes at a 07:15 kerb silently
+     * locked that child's 15:30 RELEASE — a family arriving to collect their
+     * child refused over something that happened eight hours earlier, on a
+     * different code.
+     */
+    public function test_a_morning_lockout_does_not_lock_the_afternoon_release(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+        $child = $row->child;
+
+        for ($i = 0; $i < 5; $i++) {
+            $this->postJson("/api/fleet/trips/{$trip->id}/children/{$child->id}/board", [
+                'method' => 'boarding_code',
+                'code' => '0000',
+            ]);
+        }
+
+        // The morning keypad is locked.
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$child->id}/board", [
+            'method' => 'boarding_code',
+            'code' => $child->todaysBoardingCode(),
+        ])->assertStatus(423);
+
+        // The afternoon one is not.
+        $pm = $this->startTrip($this->afternoon, $this->attendant);
+        $pmRow = SchoolTripChild::where('trip_id', $pm->id)
+            ->where('child_id', $child->id)->first();
+
+        if (! $pmRow) {
+            $this->markTestSkipped('This child has no afternoon leg to test against.');
+        }
+
+        $pmRow->forceFill(['status' => 'boarded', 'boarded_at' => now()])->save();
+
+        $this->postJson("/api/fleet/trips/{$pm->id}/children/{$child->id}/handover", [
+            'method' => 'handover_code',
+            'code' => $child->todaysHandoverCode(),
+        ])->assertOk();
+    }
+
+    /**
+     * ⚠⚠ THE ONE THAT MUST NEVER STOP PASSING.
+     *
+     * A locked keypad in the morning must not strand a child. The bus is at the
+     * kerb, the child is on the pavement, and the guardian's phone is flat. The
+     * photo roster is still a real verification and the child gets on.
+     */
+    public function test_a_locked_boarding_keypad_still_lets_the_child_board(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+
+        for ($i = 0; $i < 6; $i++) {
+            $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board", [
+                'method' => 'boarding_code',
+                'code' => '0000',
+            ]);
+        }
+
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board", [
+            'method' => 'roster_photo',
+        ])->assertOk();
+
+        $row->refresh();
+        $this->assertSame('boarded', $row->status,
+            'A child must never be left at a kerb because a keypad locked.');
+        $this->assertSame('roster_photo', $row->boarding_verification);
+
+        // ⚠ Recorded, not silent. Ops sees the ones that fell back after a
+        // failed code — that is the case worth looking at.
+        $this->assertDatabaseHas('school_trip_events', [
+            'trip_id' => $trip->id,
+            'event_type' => 'boarding_code_bypassed',
+        ]);
+    }
+
+    public function test_boarding_without_a_code_is_recorded_as_roster_verified(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+
+        // An older build of the Fleet app sends no method at all. It must keep
+        // boarding children rather than failing every tap at a kerb.
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board")
+            ->assertOk();
+
+        $this->assertSame('roster_photo', $row->refresh()->boarding_verification);
+
+        // No code was attempted, so this is the ordinary path and raises nothing.
+        $this->assertDatabaseMissing('school_trip_events', [
+            'trip_id' => $trip->id,
+            'event_type' => 'boarding_code_bypassed',
+        ]);
+    }
+
+    public function test_the_boarding_code_never_appears_in_a_payload(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $child = $this->firstPending($trip)->child;
+        $code = $child->todaysBoardingCode();
+
+        $body = $this->getJson("/api/fleet/trips/{$trip->id}")->assertOk()->content();
+
+        $this->assertStringNotContainsString('boarding_code_hash', $body);
+        $this->assertStringNotContainsString('"boarding_code"', $body);
+        $this->assertStringNotContainsString($child->boarding_code_hash ?? '###', $body);
+        $this->assertNotEmpty($code);
+    }
+
+    /**
+     * Undoing a boarding withdraws the claim about how it was verified. A row
+     * back at 'pending' carrying 'boarding_code' would assert that a guardian
+     * handed over a child who, by that same row, never got on.
+     */
+    public function test_undoing_a_boarding_clears_the_verification(): void
+    {
+        $trip = $this->startTrip($this->morning, $this->attendant);
+        $this->asAttendant();
+
+        $row = $this->firstPending($trip);
+
+        $this->postJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board", [
+            'method' => 'boarding_code',
+            'code' => $row->child->todaysBoardingCode(),
+        ])->assertOk();
+
+        $this->assertSame('boarding_code', $row->refresh()->boarding_verification);
+
+        $this->deleteJson("/api/fleet/trips/{$trip->id}/children/{$row->child_id}/board")
+            ->assertOk();
+
+        $row->refresh();
+        $this->assertSame('pending', $row->status);
+        $this->assertNull($row->boarding_verification);
+    }
 }

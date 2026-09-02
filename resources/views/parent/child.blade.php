@@ -16,6 +16,18 @@
   </div>
 @endif
 
+{{-- PART A7 (extended) — the morning boarding code. Disappears once the child
+     has boarded, so the parent is never looking at a code that has already been
+     used. A DIFFERENT number from the handover code above and never shown at the
+     same time: one is a morning trip, the other an afternoon one. --}}
+@if($boardingCode)
+  <div class="p-code" id="boardingCodeBlock">
+    <div class="p-code-label">Boarding code</div>
+    <div class="p-code-value">{{ $boardingCode }}</div>
+    <div class="p-code-note">Read this to the attendant when {{ $child->name }} boards. It changes every day, and is not the same as the afternoon handover code.</div>
+  </div>
+@endif
+
 <div class="p-card">
   <div class="p-card-head">
     <span class="p-name" id="statusLabel">{{ $card['absent'] ? 'Marked absent' : $card['status_label'] }}</span>
@@ -196,6 +208,13 @@
         // The server owns this decision (L29). When it closes the map for this
         // family, reload so the whole screen matches — code, timeline and all.
         if (!d.show_live_map) { clearInterval(timer); location.reload(); return; }
+        // The boarding code needs its own check: in the MORNING the map stays
+        // open after the child boards (it closes only once they are inside the
+        // school), so the reload above never fires and a used code would sit on
+        // screen for the rest of the trip. The server decides here too.
+        if (document.getElementById('boardingCodeBlock') && !d.show_boarding_code) {
+          clearInterval(timer); location.reload(); return;
+        }
         render(d);
       })
       .catch(function () {});
