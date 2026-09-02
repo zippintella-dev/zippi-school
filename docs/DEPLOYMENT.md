@@ -39,7 +39,7 @@ rollback, and a rollback during dismissal is the worst time to find a bad releas
 | Lint and static checks | composer validate + audit block; **Pint report-only** | dependency CVEs, lockfile drift |
 | Secret scan | blocking | `.env`, `*.sqlite`, sweep photos, APKs |
 | PHPUnit (SQLite) | **blocking** | 172 tests, the documented engine |
-| PHPUnit (MySQL) | schema blocking, tests report-only *(see below)* | the engine the server runs |
+| PHPUnit (MySQL) | **blocking** | the engine the server runs |
 | Safety invariants | **blocking, never softened** | the four invariants + the no-sync-seam rule |
 | Flutter (parent, fleet) | **blocking** | 17 + 59 tests, analyze, lockfile drift |
 | Repository hygiene | **blocking** | PART L1 date casts, bare `auth`, `token.holder` |
@@ -48,21 +48,16 @@ rollback, and a rollback during dismissal is the worst time to find a bad releas
 Point branch protection at **`CI / required`** only. New jobs get picked up
 automatically without a settings change.
 
-### Two report-only steps, and when to flip them
+### One report-only step
 
-Both are marked `continue-on-error` with a comment saying so:
+**Pint** is `continue-on-error`. It flags ~80 files; style has never been enforced
+here. Flip it after a one-off `vendor/bin/pint` run committed *on its own* — do not
+bundle that diff with anything, and check it has not rewritten the ⚠ comment blocks
+that carry the safety reasoning.
 
-1. **Pint** — flags ~80 files; style has never been enforced here. Flip it after a
-   one-off `vendor/bin/pint` run committed *on its own*. Do not bundle that diff
-   with anything, and check it has not rewritten the ⚠ comment blocks that carry
-   the safety reasoning.
-2. **PHPUnit on MySQL** — non-blocking only because the job had never run when it
-   was introduced. **Flip it as soon as one green run is observed on `develop`.**
-   Staging runs MySQL; an engine difference that only CI knows about is worth
-   nothing.
-
-`migrate:fresh` on MySQL is blocking in both cases. That is the step that stops a
-bad migration reaching the staging database.
+The MySQL job was report-only for exactly one run and is now a real gate. Writing
+it found three MySQL-only bugs, all on the Students / Removed / Restore path and
+all invisible to SQLite. Do not soften it back.
 
 ### The PART L1 guard
 

@@ -320,17 +320,16 @@ jobs:
       - name: Verify the schema builds from scratch on MySQL
         run: php artisan migrate:fresh --no-interaction
 
-      # Kept non-blocking on its FIRST introduction only, because this job has
-      # never run before and a red gate on day one blocks the very PR that adds
-      # the pipeline. The SQLite `tests` job above is the blocking correctness
-      # gate in the meantime, and `migrate:fresh` above is blocking here.
+      # A REAL GATE. It was introduced report-only for exactly one run, then
+      # flipped once run 33598049686 came back green on all 172.
       #
-      # Flip this to a real gate as soon as one green run has been observed on
-      # develop -- delete continue-on-error and this comment. Do not leave it
-      # report-only indefinitely; staging runs MySQL, and an engine difference
-      # that only CI knows about is worth nothing.
+      # Three MySQL-only bugs were found and fixed while writing this job, all
+      # on the Students / Removed / Restore path and all invisible to SQLite:
+      # a CAST(... AS INTEGER) MySQL cannot parse, a DISTINCT/ORDER BY pair it
+      # rejects with error 3065, and a test that deduplicated with `||` -- string
+      # concatenation in SQLite, logical OR in MySQL. That is what this job is
+      # for. Do not soften it back to continue-on-error; fix the incompatibility.
       - name: Run tests on MySQL
-        continue-on-error: true
         run: php artisan test --testsuite=Unit,Feature
 
   # ---------------------------------------------------------------------------
