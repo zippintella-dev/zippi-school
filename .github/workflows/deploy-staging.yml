@@ -1,0 +1,32 @@
+name: Deploy to staging
+
+# Every merge into develop lands on staging automatically. Staging is meant to be
+# disposable and frequently broken -- that is its job. Nothing here asks for
+# approval, because a slow path to staging means people stop using it.
+#
+# ⚠ CI is NOT a prerequisite of this workflow, by design: `on: push` fires
+# independently. What actually stops a broken merge reaching staging is BRANCH
+# PROTECTION on develop requiring the "CI / required" status check. If that
+# protection is not configured, this deploys whatever was pushed. See
+# docs/DEPLOYMENT.md.
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      # ⚠ Confirm this hostname before the first deploy. staging.zippi.in is
+      # already the ride backend's; this app needs its own nginx server block.
+      health_url: https://school-staging.zippi.in/up
+    secrets:
+      SSH_HOST:        ${{ secrets.SSH_HOST }}
+      SSH_USER:        ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}

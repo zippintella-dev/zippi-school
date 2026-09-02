@@ -1,0 +1,53 @@
+name: Deploy to production
+
+# Production deploys are MANUAL. There is no `on: push` trigger for main.
+#
+# This is not caution for its own sake. This application decides whether a child
+# is released to whoever is standing at a kerb. An automatic deploy triggered by
+# a merge can land in the middle of an afternoon dismissal, and the person who
+# merged is not necessarily watching. Requiring a human to press the button
+# means somebody has chosen the moment.
+#
+# Prefer deploying outside 07:00-09:30 and 14:00-16:30 Asia/Kolkata -- the
+# morning and afternoon runs. deploy.sh is zero-downtime, but a failed health
+# check triggers a rollback, and a rollback during dismissal is the worst time
+# to discover a bad release.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type the word deploy to confirm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # A typed confirmation, checked before anything is built. The `environment:`
+  # approval gate in deploy.yml is the real control -- this just stops an
+  # accidental button press from queueing a run that then waits for an approver.
+  confirm:
+    name: Confirm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation word
+        run: |
+          if [ "${{ inputs.confirm }}" != "deploy" ]; then
+            echo "::error::Confirmation not given. Type 'deploy' to proceed."
+            exit 1
+          fi
+          echo "confirmed"
+
+  deploy:
+    needs: confirm
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      # ⚠ Confirm this hostname before the first production deploy.
+      health_url: https://school.zippi.in/up
+    secrets:
+      SSH_HOST:        ${{ secrets.SSH_HOST }}
+      SSH_USER:        ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}

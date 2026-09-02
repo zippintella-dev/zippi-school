@@ -1,0 +1,205 @@
+name: Deploy (reusable)
+
+# Reusable workflow called by deploy-staging.yml and deploy-production.yml.
+# Both environments run THIS file, so staging genuinely rehearses production --
+# if the two had separate copies they would drift and staging would stop being a
+# meaningful test.
+#
+# Ported from zippintella-dev/zippi-backend, which already deploys to this EC2
+# host with the same release/symlink layout. Keeping the two pipelines the same
+# shape is deliberate: an engineer who has debugged one deploy already knows the
+# other, and deploy.sh's layout comments apply to both.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'staging or production'
+        required: true
+        type: string
+      health_url:
+        description: 'URL polled after the release goes live'
+        required: true
+        type: string
+    secrets:
+      SSH_HOST:        { required: true }
+      SSH_USER:        { required: true }
+      SSH_PRIVATE_KEY: { required: true }
+      SSH_KNOWN_HOSTS: { required: true }
+
+permissions:
+  contents: read
+
+env:
+  PHP_VERSION: '8.4'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build AND ship in one job. The server never runs composer, so a deploy
+  # cannot fail halfway because packagist is slow, and the box needs no build
+  # toolchain installed.
+  #
+  # One job rather than build+deploy with an uploaded artifact between them.
+  # zippi-backend learned this the hard way on 2026-08-31, when the Actions
+  # artifact storage quota filled and every staging deploy died at
+  # upload-artifact with a perfectly good 40MB tarball already built. This
+  # pipeline scp's the tarball straight to the server: no artifact, no quota.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.health_url }}
+
+    # Never let two deploys to the same environment interleave. Without this,
+    # two merges a minute apart can race and leave the symlink pointing at the
+    # older release. Deploys are not cancelled mid-flight -- that would abort
+    # between a migration and the symlink swap.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute release id
+        id: meta
+        run: echo "release_id=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, pdo_mysql, gd, bcmath, intl, zip, curl, iconv, simplexml, xml, xmlreader, xmlwriter, zlib, exif, tokenizer, openssl
+          coverage: none
+          tools: composer:v2
+
+      # --no-dev strips phpunit, pint, faker, pail and collision from the
+      # release. Shipping dev packages is both wasted disk and extra attack
+      # surface.
+      - name: Install production dependencies
+        run: |
+          composer install \
+            --no-dev \
+            --prefer-dist \
+            --no-interaction \
+            --no-progress \
+            --optimize-autoloader \
+            --classmap-authoritative
+
+      # NOTE: there is deliberately no `npm ci && npm run build` step, and no
+      # Vite. This application's CSS is HAND-WRITTEN in public/css/zippi.css and
+      # public/css/parent.css. There is no package.json, no node_modules and no
+      # public/build. `php artisan serve` is the only command the app needs.
+      #
+      # ⚠ Do not "modernise" this by adding Tailwind. Laravel's default
+      # pagination views are Tailwind-classed and their w-5/h-5 SVG chevrons
+      # rendered page-sized against this stylesheet; that is why
+      # resources/views/vendor/pagination/zippi.blade.php exists.
+
+      # Stamp the release so the box can report exactly which build is live.
+      # When something breaks at 2am this is the difference between knowing and
+      # guessing.
+      - name: Stamp release
+        run: |
+          {
+            echo "${{ steps.meta.outputs.release_id }}"
+            echo "commit:  ${GITHUB_SHA}"
+            echo "ref:     ${GITHUB_REF}"
+            echo "built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run:     ${GITHUB_RUN_ID}"
+          } > RELEASE
+
+      # This exclude list is the ONLY thing that decides what reaches the server.
+      #
+      # mobile/ is excluded and that is worth stating plainly: the two Flutter
+      # apps are CLIENTS of this server, not part of what it serves. Their source
+      # is ~1MB of Dart that nginx would never read, and shipping it would put
+      # the fleet app's source on a public web root.
+      #
+      # dist/ is excluded for the same reason plus size -- it holds signed APKs.
+      - name: Create release tarball
+        run: |
+          tar czf /tmp/release.tar.gz \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./node_modules' \
+            --exclude='./tests' \
+            --exclude='./docs' \
+            --exclude='./design' \
+            --exclude='./dist' \
+            --exclude='./mobile' \
+            --exclude='./storage' \
+            --exclude='./.env' \
+            --exclude='./phpunit.xml' \
+            --exclude='./database/database.sqlite' \
+            .
+          ls -lh /tmp/release.tar.gz
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+
+          # `tr -d '\r'` is load-bearing. A key copied on Windows arrives with
+          # CRLF line endings and OpenSSH rejects it with the distinctly
+          # unhelpful "Load key: error in libcrypto". printf guarantees the
+          # trailing newline OpenSSH also requires.
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Fail here, with a clear message, rather than 40 lines later on an
+          # opaque scp error.
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "::error::SSH_PRIVATE_KEY is not a valid private key."
+            echo "It must be the ENTIRE file including the BEGIN and END lines."
+            exit 1
+          fi
+          echo "deploy key loaded: $(ssh-keygen -lf ~/.ssh/deploy_key)"
+
+          # Pinning the host key prevents a man-in-the-middle from receiving the
+          # artifact. Never replace this with StrictHostKeyChecking=no.
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Upload release tarball to server
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            /tmp/release.tar.gz \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/release-${{ steps.meta.outputs.release_id }}.tar.gz"
+
+      # deploy.sh handles the symlink swap, migrations, health check and
+      # automatic rollback. Uploading it on every run means the script that
+      # executes always matches the commit being deployed -- there is no stale
+      # copy on the server that silently diverges from the repo.
+      - name: Run deploy
+        run: |
+          RELEASE="${{ steps.meta.outputs.release_id }}"
+          TARGET="${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}"
+
+          scp -i ~/.ssh/deploy_key deploy/deploy.sh "${TARGET}:/tmp/deploy-${RELEASE}.sh"
+
+          ssh -i ~/.ssh/deploy_key "$TARGET" \
+            "chmod +x /tmp/deploy-${RELEASE}.sh && /tmp/deploy-${RELEASE}.sh ${{ inputs.environment }} ${RELEASE} /tmp/release-${RELEASE}.tar.gz"
+
+      - name: Clean up remote tarball
+        if: always()
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "rm -f /tmp/release-${{ steps.meta.outputs.release_id }}.tar.gz /tmp/deploy-${{ steps.meta.outputs.release_id }}.sh" || true
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+      - name: Report
+        run: |
+          {
+            echo "### Deployed to ${{ inputs.environment }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Release | \`${{ steps.meta.outputs.release_id }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Health | ${{ inputs.health_url }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

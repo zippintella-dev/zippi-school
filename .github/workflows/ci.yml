@@ -1,0 +1,604 @@
+name: CI
+
+# Runs on every push and every pull request. Nothing reaches staging or
+# production without this passing -- branch protection on main and develop
+# requires the "CI / required" job at the bottom.
+#
+# This pipeline is deliberately modelled on zippintella-dev/zippi-backend's, so
+# the two Zippi repositories fail the same way and an engineer who has debugged
+# one already knows the other. Where it DIVERGES it is because this repository
+# ships four layers rather than one: a Laravel dashboard, a Blade parent PWA and
+# two Flutter apps. The extra jobs are `flutter`, `safety` and the PART L1 guard
+# inside `hygiene`.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# A newer push to the same branch makes the in-flight run obsolete. Cancel it
+# rather than paying for CI on code nobody will merge.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Match the server exactly. Staging and production run php-fpm 8.4; testing on
+  # anything else means CI can pass against a PHP version that never serves a
+  # request. composer.json allows ^8.3 and this machine develops on 8.5 -- 8.4 is
+  # the one that matters because it is the one that answers users.
+  PHP_VERSION: '8.4'
+  # Pinned, not `stable`. An unpinned Flutter silently upgrades under the repo
+  # and turns an unrelated toolchain change into a red build on a PR that did
+  # not touch Dart.
+  FLUTTER_VERSION: '3.44.6'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static checks that need no database. Fast, so they fail first.
+  # ---------------------------------------------------------------------------
+  static:
+    name: Lint and static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, pdo_mysql, sqlite3, pdo_sqlite, gd, bcmath, intl, zip, curl, iconv, simplexml, xml, xmlreader, xmlwriter, zlib, exif, tokenizer, openssl
+          coverage: none
+          tools: composer:v2
+
+      # composer.json and composer.lock must agree. If someone edits
+      # composer.json without running composer update, this catches it before the
+      # deploy build fails on the server.
+      - name: Validate composer files
+        run: composer validate --strict --no-check-publish
+
+      - name: Cache composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      # REPORT-ONLY FOR NOW, exactly as in zippi-backend and for the same reason.
+      # The first run flagged ~80 files, because style has never been enforced on
+      # this codebase. Gating on that would block every merge until somebody
+      # reformats the whole repository, which is not a good first task -- and a
+      # blanket reformat would rewrite the ⚠ comment blocks that carry the safety
+      # reasoning, which is exactly the diff nobody wants to review.
+      #
+      # The violations still print in the log, so they stay visible. Once a
+      # one-off `vendor/bin/pint` run has been done and committed ON ITS OWN,
+      # delete continue-on-error and this comment, and Pint becomes a real gate.
+      - name: Check code style (Pint)
+        continue-on-error: true
+        run: vendor/bin/pint --test
+
+      # Fails the build if any installed package has a known CVE. Cheapest
+      # security control available and it costs one command.
+      - name: Audit dependencies for known vulnerabilities
+        run: composer audit --no-interaction
+
+  # ---------------------------------------------------------------------------
+  # Guard against secrets and personal data being committed.
+  #
+  # This repository is a CHILD SAFETY application. A leaked .env here is not an
+  # embarrassment, it is 217 children's names, stops and guardians' phone
+  # numbers. That is why this job also refuses the seeded SQLite database and
+  # the sweep photographs, neither of which gitleaks would consider a secret.
+  # ---------------------------------------------------------------------------
+  secrets-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    # Scoped to this job on purpose. gitleaks-action lists the pull request's
+    # commits on a `pull_request` event, which the workflow-level
+    # `contents: read` does not permit -- it fails with
+    #   GET /repos/:owner/:repo/pulls/:n/commits -> 403
+    #   "Resource not accessible by integration"
+    #
+    # A job-level block REPLACES the workflow default rather than adding to it,
+    # so `contents: read` is restated here. Keep this grant on this job only.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history to scan commits, not just the tip.
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Belt and braces: a plain .env must never be tracked, whatever gitleaks
+      # thinks of its contents.
+      - name: Assert no .env file is tracked
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked in git. Remove it and rotate every credential it contained."
+            exit 1
+          fi
+          echo "OK: no tracked .env"
+
+      # The demo database holds 217 real-shaped child records, 390 guardians and
+      # their phone numbers. It is regenerable in one command
+      # (`php artisan migrate:fresh --seed`), so there is never a reason to
+      # commit it.
+      - name: Assert no database or child data is tracked
+        run: |
+          BAD=$(git ls-files \
+                | grep -E '\.sqlite$|\.sqlite3$|^storage/app/private/sweeps/|^storage/app/backups/' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Database files or child data are committed:"
+            echo "$BAD"
+            echo "Regenerate the demo data instead: php artisan migrate:fresh --seed"
+            exit 1
+          fi
+          echo "OK: no database or child data tracked"
+
+      # dist/ holds signed APKs at ~180MB each. GitHub hard-rejects blobs over
+      # 100MB, so this fails the PR with an explanation rather than letting the
+      # push itself fail with a wall of git-lfs advice.
+      - name: Assert no build artefacts are tracked
+        run: |
+          BAD=$(git ls-files | grep -E '\.(apk|aab|ipa|tar\.gz|zip)$' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Build artefacts are committed. These belong in dist/, which is gitignored:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: no build artefacts tracked"
+
+  # ---------------------------------------------------------------------------
+  # The test suite on SQLite -- the engine phpunit.xml declares and the one all
+  # 172 tests were written against. This is the blocking correctness gate.
+  # ---------------------------------------------------------------------------
+  tests:
+    name: PHPUnit (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite, gd, bcmath, intl, zip, curl, iconv, simplexml, xml, xmlreader, xmlwriter, zlib, exif, tokenizer, openssl
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          mkdir -p storage/framework/{cache,sessions,views,testing} storage/logs bootstrap/cache
+          # database/*.sqlite is gitignored (the seeded demo DB holds 217 real-shaped
+          # child records), so the file does not exist on a fresh checkout. phpunit.xml
+          # runs on :memory:, but `artisan migrate:fresh` reads .env and needs a real
+          # file to open.
+          mkdir -p database && touch database/database.sqlite
+
+      # Prove the schema builds from nothing. This is a check in its own right --
+      # a repository that cannot be migrated from scratch cannot be deployed to a
+      # fresh staging box, and nothing else in CI would tell you.
+      - name: Verify the schema builds from scratch
+        run: php artisan migrate:fresh --no-interaction
+
+      # A REAL GATE, unlike zippi-backend's equivalent. All 172 tests pass today
+      # (1,790 assertions), so there is no legacy failure to grandfather in. If
+      # this ever needs continue-on-error, the correct response is to fix the
+      # test, not to silence the job.
+      - name: Run tests
+        run: php artisan test --testsuite=Unit,Feature
+
+  # ---------------------------------------------------------------------------
+  # The same suite against MySQL, which is what staging and production actually
+  # run. The app develops on SQLite (config/database.php defaults to it), so
+  # without this job the first thing to discover an engine incompatibility would
+  # be a migration against the staging database -- the one genuinely
+  # irreversible step in deploy.sh.
+  #
+  # Two things are checked separately and on purpose:
+  #
+  #   1. the schema BUILDS on MySQL          -- blocking, always
+  #   2. the suite PASSES on MySQL           -- see the comment on that step
+  #
+  # (1) is the one that protects the deploy. A migration that MySQL rejects is
+  # caught here, in a container nobody depends on, instead of halfway through
+  # `migrate --force` on staging.
+  # ---------------------------------------------------------------------------
+  mysql:
+    name: PHPUnit (MySQL)
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: zippi_school_test
+          MYSQL_USER: zippi
+          MYSQL_PASSWORD: secret
+        ports:
+          - 3306:3306
+        # Without a health check the job races the container and fails on
+        # "connection refused".
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      # Real environment variables, so they win over phpunit.xml's <env> block --
+      # PHPUnit does not overwrite a variable that already exists in the
+      # environment, which is what makes this override work at all.
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: zippi_school_test
+      DB_USERNAME: root
+      DB_PASSWORD: root
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, mysql, pdo_mysql, gd, bcmath, intl, zip, curl, iconv, simplexml, xml, xmlreader, xmlwriter, zlib, exif, tokenizer, openssl
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          mkdir -p storage/framework/{cache,sessions,views,testing} storage/logs bootstrap/cache
+          # database/*.sqlite is gitignored (the seeded demo DB holds 217 real-shaped
+          # child records), so the file does not exist on a fresh checkout. phpunit.xml
+          # runs on :memory:, but `artisan migrate:fresh` reads .env and needs a real
+          # file to open.
+          mkdir -p database && touch database/database.sqlite
+
+      # The service health check reports healthy, but MySQL can still refuse the
+      # first connections while it finishes initialising. An explicit wait turns
+      # a flaky "connection refused" into a clear failure message.
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent 2>/dev/null; then
+              echo "MySQL is accepting connections"
+              mysql -h 127.0.0.1 -uroot -proot -e "SELECT VERSION();"
+              exit 0
+            fi
+            echo "  attempt $i: not ready yet"
+            sleep 2
+          done
+          echo "::error::MySQL never became ready"
+          exit 1
+
+      # BLOCKING. This is the step that protects the staging migration.
+      #
+      # ⚠ It also guards PART L1 from the schema side: service_date,
+      # school_calendars.date and every effective_from/effective_to must be real
+      # DATE columns. SQLite stores them as TEXT and will accept almost anything;
+      # MySQL will not.
+      - name: Verify the schema builds from scratch on MySQL
+        run: php artisan migrate:fresh --no-interaction
+
+      # Kept non-blocking on its FIRST introduction only, because this job has
+      # never run before and a red gate on day one blocks the very PR that adds
+      # the pipeline. The SQLite `tests` job above is the blocking correctness
+      # gate in the meantime, and `migrate:fresh` above is blocking here.
+      #
+      # Flip this to a real gate as soon as one green run has been observed on
+      # develop -- delete continue-on-error and this comment. Do not leave it
+      # report-only indefinitely; staging runs MySQL, and an engine difference
+      # that only CI knows about is worth nothing.
+      - name: Run tests on MySQL
+        continue-on-error: true
+        run: php artisan test --testsuite=Unit,Feature
+
+  # ---------------------------------------------------------------------------
+  # ⚠ THE FOUR SAFETY INVARIANTS.
+  #
+  # These already run inside the `tests` job. They run AGAIN here, alone, for one
+  # reason: when this job goes red the failure is unambiguous on the PR page. A
+  # reviewer sees "Safety invariants" failing rather than "PHPUnit 171/172", and
+  # nobody merges it on the assumption that a flaky test needs a re-run.
+  #
+  #   1. A child is never released without a verified receiver.
+  #   2. A trip cannot complete while a child is unaccounted for.
+  #   3. The bus is physically swept before the trip closes.
+  #   4. A stuck ride alerts, and every override is audited.
+  #
+  # FleetLinkTest is here too because it asserts the ABSENCE of a seam: the three
+  # layers share one set of rows and there is no sync step. A second, fleet-side
+  # store of child state re-opens "which copy is right about where this child
+  # is", and that question has no acceptable answer.
+  #
+  # This job is never continue-on-error. There is no version of this repository
+  # in which a failing safety invariant is acceptable to merge.
+  # ---------------------------------------------------------------------------
+  safety:
+    name: Safety invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite, gd, bcmath, intl, zip, curl, iconv, simplexml, xml, xmlreader, xmlwriter, zlib, exif, tokenizer, openssl
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          mkdir -p storage/framework/{cache,sessions,views,testing} storage/logs bootstrap/cache
+          # database/*.sqlite is gitignored (the seeded demo DB holds 217 real-shaped
+          # child records), so the file does not exist on a fresh checkout. phpunit.xml
+          # runs on :memory:, but `artisan migrate:fresh` reads .env and needs a real
+          # file to open.
+          mkdir -p database && touch database/database.sqlite
+
+      # The test files must EXIST. Without this, deleting SafetyInvariantsTest.php
+      # would make the filter match nothing, PHPUnit would exit 0, and the job
+      # would go green on a repository with no safety tests at all.
+      - name: Assert the safety test files exist
+        run: |
+          for f in tests/Feature/SafetyInvariantsTest.php tests/Feature/FleetLinkTest.php tests/Feature/FleetApiTest.php; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing. The safety gate cannot be removed by deleting its tests."
+              exit 1
+            fi
+          done
+          echo "OK: all three safety test files present"
+
+      - name: The four invariants
+        run: php artisan test tests/Feature/SafetyInvariantsTest.php
+
+      - name: No second store of child state (layers share one set of rows)
+        run: php artisan test tests/Feature/FleetLinkTest.php
+
+      - name: The server refuses a tampered fleet request
+        run: php artisan test tests/Feature/FleetApiTest.php
+
+  # ---------------------------------------------------------------------------
+  # The two Flutter apps. zippi-backend has no equivalent job because it ships no
+  # mobile client; this repository ships two.
+  #
+  # A matrix rather than two jobs, so adding a third app is one line. `fail-fast:
+  # false` because Fleet failing tells you nothing about Parent, and finding out
+  # both are broken in one run beats two round trips.
+  # ---------------------------------------------------------------------------
+  flutter:
+    name: Flutter (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [zippi_parent, zippi_fleet]
+    defaults:
+      run:
+        working-directory: mobile/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve packages
+        run: flutter pub get
+
+      # pubspec.lock is committed for both apps. If it no longer satisfies
+      # pubspec.yaml, `pub get` rewrites it -- and CI would silently test a
+      # different dependency set from the one a developer gets. Fail instead.
+      - name: pubspec.lock must be up to date
+        run: |
+          if ! git diff --quiet pubspec.lock; then
+            echo "::error::pub get modified pubspec.lock. Commit the updated lockfile."
+            git diff pubspec.lock
+            exit 1
+          fi
+          echo "OK: pubspec.lock unchanged"
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      # ⚠ For zippi_fleet this includes screen_smoke_test.dart, which pumps every
+      # screen at 428x908 INCLUDING its blocked, expired and refused states.
+      # Those are the ones a manual walkthrough never reaches, and a RenderFlex
+      # overflow on the escalation screen is a bug nobody finds until the worst
+      # afternoon of somebody's year.
+      - name: Test
+        run: flutter test
+
+  # ---------------------------------------------------------------------------
+  # Repository hygiene, plus the guards this codebase specifically needs.
+  # ---------------------------------------------------------------------------
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # ⚠ PART L1 -- the date rule, and the single most likely thing to break in
+      # this codebase.
+      #
+      # service_date, school_calendars.date and every effective_from /
+      # effective_to column are raw Y-m-d STRINGS on the model. Adding a 'date'
+      # cast makes Carbon read the value as midnight in APP_TIMEZONE, re-serialise
+      # as UTC, and shift every IST date back one calendar day. That is exactly
+      # what made undo-leave delete zero rows in the enterprise module.
+      #
+      # The failure is SILENT. Nothing throws; rows simply stop matching, and it
+      # presents days later as "I marked her absent and the bus still waited."
+      # No test catches a cast that has not been added yet, which is why this is
+      # a grep and not a test.
+      #
+      # The awk filter is load-bearing. Seven models carry warning comments that
+      # QUOTE the forbidden line -- e.g. SchoolTrip.php:39
+      #     // 'service_date' => 'date',   ← NEVER. See PART L1.
+      # A naive grep flags those and the job cries wolf on a clean tree, so
+      # commented lines are stripped before matching. Verified both ways: silent
+      # on the comments, red on a real cast.
+      # -----------------------------------------------------------------------
+      - name: PART L1 -- no 'date' cast on DATE columns
+        run: |
+          BAD=$(grep -rnE "'(service_date|date|effective_from|effective_to)'[[:space:]]*=>[[:space:]]*'date'" app/Models/ 2>/dev/null \
+                | awk '{ c=$0; sub(/^[^:]*:[0-9]+:[[:space:]]*/, "", c); if (c !~ /^(\/\/|\*|\/\*|#)/) print }' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::A 'date' cast was added to a DATE column. See PART L1 in CLAUDE.md."
+            echo "$BAD"
+            echo ""
+            echo "Carbon will read this as midnight in APP_TIMEZONE and re-serialise as UTC,"
+            echo "shifting every IST date back one calendar day. Datetime columns keep their"
+            echo "casts; DATE columns stay bare strings."
+            exit 1
+          fi
+          echo "OK: no date casts on DATE columns"
+
+      # -----------------------------------------------------------------------
+      # ⚠ Two identities, deliberately separate. Ops routes are pinned to
+      # auth:web and parent routes to auth:guardian -- never bare `auth`, which
+      # resolves the ambient default guard and lets a Guardian object reach
+      # Controller::activeSchool() -> isZippi() and 500.
+      #
+      # Worse than the 500: a bare guard is how a parent session ends up
+      # authorised against an ops route. ParentController::myChild() is the
+      # authorization gate for every child lookup, and it only helps on routes
+      # that actually resolve a guardian.
+      # -----------------------------------------------------------------------
+      - name: Auth middleware must name its guard
+        run: |
+          BAD=$(grep -rnE "middleware\(\s*\[?\s*'auth'\s*\]?\s*\)|'middleware'\s*=>\s*'auth'\s*[,)]" routes/ app/ 2>/dev/null \
+                | awk '{ c=$0; sub(/^[^:]*:[0-9]+:[[:space:]]*/, "", c); if (c !~ /^(\/\/|\*|\/\*|#)/) print }' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Bare 'auth' middleware. Use auth:web, auth:guardian or auth:sanctum explicitly."
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: every auth middleware names its guard"
+
+      # -----------------------------------------------------------------------
+      # ⚠ token.holder pins each API group to one kind of token. Sanctum
+      # authenticates whoever a bearer token belongs to and does not care which
+      # model it is -- without this middleware an attendant's fleet token would
+      # authenticate against /api/parent, where every route resolves children
+      # through $request->user(). Both directions are tested in FleetApiTest and
+      # ParentApiTest; this catches its removal from the routes themselves.
+      # -----------------------------------------------------------------------
+      - name: API groups must pin their token holder
+        run: |
+          if ! grep -q "token.holder" routes/api.php; then
+            echo "::error::routes/api.php no longer uses the token.holder middleware."
+            echo "Without it a fleet token authenticates against /api/parent and vice versa."
+            exit 1
+          fi
+          echo "OK: token.holder present"
+
+      - name: Migrations must carry a timestamp prefix
+        run: |
+          # Laravel orders migrations by filename. Without a timestamp prefix a
+          # migration sorts AFTER every dated one, so it runs last no matter what
+          # it depends on.
+          BAD=$(git ls-files 'database/migrations/*' \
+                | grep -vE '/[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Migrations without a timestamp prefix:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: all migrations are timestamped"
+
+      - name: No backup copies committed
+        run: |
+          BAD=$(git ls-files \
+                | grep -E '\.(bak|bkup|orig|rej|save)([-.][A-Za-z0-9_-]+)?$|\.pre-|\.post-' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Backup files are committed. Git is the backup; delete these:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: no backup files tracked"
+
+      - name: No unresolved merge conflict markers
+        run: |
+          BAD=$(git grep -lE '^(<<<<<<< |>>>>>>> )' -- '*.php' '*.dart' '*.js' '*.blade.php' '*.json' '*.yml' '*.css' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Unresolved merge conflict markers:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: no conflict markers"
+
+  # ---------------------------------------------------------------------------
+  # Single gate for branch protection. Point the required status check at this
+  # one job so adding a new job above does not need a settings change.
+  # ---------------------------------------------------------------------------
+  required:
+    name: required
+    runs-on: ubuntu-latest
+    needs: [static, secrets-scan, tests, mysql, safety, flutter, hygiene]
+    if: always()
+    steps:
+      - name: Fail if any dependency failed
+        run: |
+          if echo '${{ join(needs.*.result, ' ') }}' | grep -qE 'failure|cancelled'; then
+            echo "::error::One or more CI jobs did not succeed."
+            exit 1
+          fi
+          echo "All CI jobs passed."
