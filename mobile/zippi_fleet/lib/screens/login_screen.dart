@@ -1,0 +1,350 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../config.dart';
+import '../services/fleet_api.dart';
+import '../services/fleet_scope.dart';
+import '../services/fleet_store.dart';
+import '../services/health_check.dart';
+import '../services/server_store.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+import 'verify_screen.dart';
+
+/// Screen 1 — Login.
+///
+/// Phone number → 4-digit OTP, the same pattern the Parent app uses, because
+/// the same person may hold both apps and a second sign-in idiom is a second
+/// thing to explain in the one training session anybody gets.
+///
+/// ⚠ An unknown number must not be distinguishable from a known one. Telling a
+/// stranger which numbers belong to a school's bus crew is a staff-safety leak.
+/// The server returns the same response either way, and this screen must not
+/// add a check of its own.
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _phone = TextEditingController();
+  String? _error;
+  bool _busy = false;
+
+  /// An Indian mobile is 10 digits, 12 with the country code. Bounding it
+  /// matters: without an upper bound a mistyped extra digit is accepted, a code
+  /// is dispatched to a number that cannot exist, and the app says "we sent you
+  /// a code" while the crew waits for an SMS that never arrives.
+  static const _minDigits = 10;
+  static const _maxDigits = 13;
+
+  /// Lets the crew retarget the app when the school server's address moves.
+  ///
+  /// ⚠ Deliberately quiet, and deliberately reachable. Quiet because it is not
+  /// part of signing in and an attendant should never wonder whether they are
+  /// meant to touch it; reachable because when it IS wrong, every screen in the
+  /// app reports a timeout and this is the only thing that fixes it — and the
+  /// person holding the phone is standing next to a bus, not next to a laptop
+  /// that can rebuild an APK.
+
+  /// Runs the health check and shows the answer. See HealthCheck for why the
+  /// phone has to be able to answer this on its own.
+  bool _testing = false;
+
+  Future<void> _testConnection() async {
+    setState(() => _testing = true);
+    final result = await HealthCheck().run();
+    if (!mounted) return;
+    setState(() => _testing = false);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(result.ok ? 'Connected' : 'Cannot reach the server',
+            style: Z.head(18)),
+        content: Text(result.message, style: Z.text(14)),
+        actions: [
+          if (!result.ok)
+            TextButton(
+              onPressed: () { Navigator.of(ctx).pop(); _editServer(); },
+              child: const Text('Change address'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editServer() async {
+    final controller = TextEditingController(
+      text: Config.isOverridden ? Config.apiBase : '',
+    );
+
+    final saved = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('School server', style: Z.head(18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'The address of your school\'s server. Ask your transport '
+              'office if you are not sure — leave it blank to go back to '
+              'the built-in default.',
+              style: Z.text(13, color: Z.muted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: InputDecoration(
+                hintText: Config.compiledApiBase,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved == null) return;
+
+    await ServerStore().save(saved);
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final raw = _phone.text.trim();
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+
+    if (digits.length < _minDigits || digits.length > _maxDigits) {
+      setState(() => _error = digits.length < _minDigits
+          ? 'Please enter your full mobile number.'
+          : 'That number has too many digits — please check it.');
+      return;
+    }
+
+    setState(() {
+      _error = null;
+      _busy = true;
+    });
+
+    final phone = raw.startsWith('+') ? raw : '+91$digits';
+    final api = FleetScope.of(context).api;
+
+    if (api != null) {
+      try {
+        await api.sendOtp(phone);
+      } on SafetyViolation catch (e) {
+        // ⚠ Rendered VERBATIM (PART P7). The server's sentence for a throttle
+        // says how long to wait; ours would not.
+        setState(() {
+          _error = e.message;
+          _busy = false;
+        });
+        return;
+      } on FleetTransportException catch (e) {
+        setState(() {
+          _error = e.message;
+          _busy = false;
+        });
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => VerifyScreen(phone: phone)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 48, 24, 8),
+                    child: Column(
+                      children: [
+                        const FleetMark(),
+                        const SizedBox(height: 14),
+                        const FleetWordmark(size: 32),
+                        const SizedBox(height: 4),
+                        Text('The vehicle app. For attendants and drivers.',
+                            textAlign: TextAlign.center,
+                            style: Z.text(15, color: Z.muted)),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text('Mobile number',
+                            style: Z.text(14,
+                                color: Z.ink, weight: FontWeight.w800)),
+                        const SizedBox(height: 14),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Fixed +91 affix.
+                            Container(
+                              height: Z.hField,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: Z.surface,
+                                borderRadius: BorderRadius.circular(Z.rField),
+                                border: Border.all(
+                                    color: Z.cardBorder, width: 1.5),
+                              ),
+                              child: Text('+91',
+                                  style: Z.text(16,
+                                      color: Z.ink, weight: FontWeight.w700)),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextField(
+                                controller: _phone,
+                                keyboardType: TextInputType.phone,
+                                autofillHints: const [
+                                  AutofillHints.telephoneNumberLocal
+                                ],
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.allow(
+                                      RegExp(r'[0-9 ]')),
+                                  LengthLimitingTextInputFormatter(13),
+                                ],
+                                textInputAction: TextInputAction.done,
+                                onSubmitted: (_) => _submit(),
+                                // 16px minimum in any text input — smaller and
+                                // iOS zooms the page, Android renders it in a
+                                // moving vehicle at a size nobody can read.
+                                style: Z.text(16,
+                                    color: Z.ink, weight: FontWeight.w700),
+                                decoration: const InputDecoration(
+                                    hintText: '98765 43210'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 10),
+                          Text(_error!,
+                              style: Z.text(13,
+                                  color: Z.coralText, weight: FontWeight.w700)),
+                        ],
+                        const SizedBox(height: 14),
+                        Text(
+                          Config.demoMode
+                              // ⚠ Say so. A build that invents its own answers
+                              // must never be mistaken for one that does not.
+                              ? 'Demo build — no server. Nothing you record '
+                                  'here leaves this phone.'
+                              : "We'll send a 4-digit OTP by SMS. "
+                                  'No password to remember.',
+                          style: Z.text(13,
+                              color: Config.demoMode ? Z.amber : Z.muted,
+                              weight: Config.demoMode
+                                  ? FontWeight.w700
+                                  : FontWeight.w400),
+                        ),
+                        const SizedBox(height: 14),
+                        FilledButton(
+                          onPressed: _busy ? null : _submit,
+                          child: _busy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Z.onTurquoise),
+                                )
+                              : const Text('Send OTP'),
+                        ),
+                        const SizedBox(height: 14),
+                        Text.rich(
+                          TextSpan(
+                            text: 'Your transport office gives Zippi your '
+                                'number — ',
+                            children: [
+                              TextSpan(
+                                text: 'need help?',
+                                style: Z.text(13,
+                                    color: Z.teal, weight: FontWeight.w700),
+                              ),
+                            ],
+                          ),
+                          textAlign: TextAlign.center,
+                          style: Z.text(13, color: Z.muted),
+                        ),
+                        const SizedBox(height: 18),
+                        // The server the app is pointed at. Shown always, not
+                        // hidden behind a gesture: when it is wrong every
+                        // screen times out, and a crew member needs to be able
+                        // to SEE that it is wrong before they can fix it.
+                        InkWell(
+                          onTap: _editServer,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 6, horizontal: 8),
+                            child: Text(
+                              'Server: ${Config.apiBase}'
+                              '${Config.isOverridden ? '' : ' (default)'}  ·  Change',
+                              textAlign: TextAlign.center,
+                              style: Z.text(12, color: Z.muted),
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _testing ? null : _testConnection,
+                          child: Text(_testing ? 'Testing…' : 'Test connection',
+                              style: Z.text(12, weight: FontWeight.w700)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

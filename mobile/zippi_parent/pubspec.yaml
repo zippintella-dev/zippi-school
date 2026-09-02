@@ -1,0 +1,56 @@
+name: zippi_parent
+description: "Zippi Parent — track your child's school bus."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # HTTP to the Laravel API.
+  http: ^1.2.2
+
+  # The bearer token goes in the Keychain / Android Keystore, never in
+  # SharedPreferences — it grants access to a child's live location.
+  flutter_secure_storage: ^9.2.2
+
+  # Date/time formatting in the school's locale.
+  intl: ^0.19.0
+
+  # tel: links for "Call school".
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Bundled rather than fetched at runtime. The design calls for Quicksand +
+  # Mulish, and a parent opening this at a kerb on patchy signal must not get
+  # a flash of Roboto — or no text at all.
+  fonts:
+    - family: Quicksand
+      fonts:
+        - asset: assets/fonts/Quicksand-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Quicksand-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Quicksand-Bold.ttf
+          weight: 700
+    - family: Mulish
+      fonts:
+        - asset: assets/fonts/Mulish-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Mulish-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Mulish-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Mulish-ExtraBold.ttf
+          weight: 800

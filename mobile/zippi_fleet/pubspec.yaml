@@ -1,0 +1,67 @@
+name: zippi_fleet
+description: "Zippi Fleet — the vehicle app. Attendant and driver."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # HTTP to the Laravel API. `routes/api.php` carries /api/parent only — the
+  # fleet endpoints are not built, so nothing calls this yet. See README.md.
+  http: ^1.2.2
+
+  # The bearer token goes in the Keychain / Android Keystore, never in
+  # SharedPreferences — it grants the right to mark a child boarded.
+  flutter_secure_storage: ^9.2.2
+
+  # Date/time formatting in the school's locale.
+  intl: ^0.19.0
+
+  # tel: links for "Call the transport office".
+  url_launcher: ^6.3.1
+
+  # Invariant #3 — the sweep is photo-backed. Camera only, never the gallery;
+  # a picked image is a photo of last Tuesday's empty aisle.
+  image_picker: ^1.1.2
+
+  # ⚠ The device IS the bus tracker until a hardware unit exists. Its position
+  # drives the Zippi Parent live map, the stop geo-fences, and Invariant #3's
+  # "you are not at the school gate" refusal. Faking any of those from a stop's
+  # published coordinates would defeat the checks they exist to enforce.
+  geolocator: ^13.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Bundled, not fetched. Same reasoning as the Parent app, and more so here:
+  # the route passes through dead zones, and an attendant boarding 22 children
+  # cannot wait for a webfont.
+  fonts:
+    - family: Quicksand
+      fonts:
+        - asset: assets/fonts/Quicksand-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Quicksand-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Quicksand-Bold.ttf
+          weight: 700
+    - family: Mulish
+      fonts:
+        - asset: assets/fonts/Mulish-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Mulish-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Mulish-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Mulish-ExtraBold.ttf
+          weight: 800

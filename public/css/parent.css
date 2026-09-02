@@ -1,0 +1,343 @@
+/* ==========================================================================
+   Zippi Parent — mobile web app (PART H4)
+
+   Layered on top of zippi.css purely for the design tokens; every rule here is
+   scoped to .p-* so it can never leak into the ops dashboard. Mobile-first and
+   single-column throughout — this is opened one-handed at a bus stop, often in
+   sunlight, often while holding a child.
+
+   Sizing rules that are not negotiable:
+     - 44px minimum tap target (Apple HIG); 56px on anything safety-critical
+     - 16px minimum on any <input>, or iOS Safari zooms the page on focus
+     - status colours carry a text label too, never colour alone
+   ========================================================================== */
+
+.p-body {
+  background: var(--bg);
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---------- top bar ---------- */
+
+.p-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--teal);
+  color: #fff;
+  padding-top: env(safe-area-inset-top);
+  box-shadow: var(--shadow);
+}
+
+.p-top-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 14px;
+}
+
+.p-top-title {
+  font-weight: 650;
+  font-size: 17px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.p-back {
+  color: #fff;
+  text-decoration: none;
+  font-size: 30px;
+  line-height: 1;
+  width: 32px;
+  margin-left: -6px;
+}
+
+.p-linkbtn {
+  background: none;
+  border: 0;
+  color: #fff;
+  opacity: .9;
+  font-size: 14px;
+  padding: 8px 2px;
+  cursor: pointer;
+}
+
+/* ---------- main ---------- */
+
+.p-main {
+  padding: 14px 14px 92px;      /* bottom clears the tab bar */
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.p-flash {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.p-flash.ok  { background: var(--ok-bg);     color: var(--ok);     border: 1px solid #CBE6CC; }
+.p-flash.bad { background: var(--danger-bg); color: var(--danger); border: 1px solid #F5CFCF; }
+
+/* ---------- child card ---------- */
+
+.p-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-bottom: 12px;
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.p-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.p-name { font-size: 19px; font-weight: 650; }
+.p-meta { color: var(--ink-3); font-size: 13px; }
+
+/* Status pill. Colour PLUS words — a parent glancing in sunlight, or a
+   colour-blind parent, must get the same information. */
+.p-pill {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.p-pill.live    { background: var(--teal-soft);    color: var(--teal-dark); border-color: var(--teal-line); }
+.p-pill.ok      { background: var(--ok-bg);        color: var(--ok);        border-color: #CBE6CC; }
+.p-pill.warn    { background: var(--warn-bg);      color: var(--warn);      border-color: #F0DDB4; }
+.p-pill.bad     { background: var(--danger-bg);    color: var(--danger);    border-color: #F5CFCF; }
+.p-pill.idle    { background: var(--line-soft);    color: var(--ink-3);     border-color: var(--line); }
+.p-pill.morning { background: var(--morning-bg);   color: var(--morning); }
+.p-pill.evening { background: var(--afternoon-bg); color: var(--afternoon); }
+
+.p-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+.p-row:first-of-type { border-top: 0; }
+.p-row dt { color: var(--ink-3); margin: 0; }
+.p-row dd { margin: 0; text-align: right; font-weight: 550; }
+
+/* ---------- handover code (PART A7) ---------- */
+
+/* The afternoon centrepiece. Deliberately the largest thing on the screen:
+   it is read aloud through a bus window, at a kerb, in traffic noise. */
+.p-code {
+  background: var(--teal-soft);
+  border: 2px solid var(--teal-line);
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+.p-code-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .10em;
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+.p-code-value {
+  font-size: 48px;
+  font-weight: 750;
+  letter-spacing: .16em;
+  color: var(--teal-dark);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  margin: 6px 0 2px;
+}
+.p-code-note { font-size: 12px; color: var(--ink-3); }
+
+/* ---------- map ---------- */
+
+/* Schematic plot, same as the ops live board. Production swaps in Google Maps
+   + Firebase RTDB on ID/{driver_id} — the markers already carry lat/lng. */
+.p-map {
+  position: relative;
+  height: 220px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 28px 100%,
+    var(--surface);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.p-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  line-height: 1;
+}
+.p-marker.stop { font-size: 18px; }
+.p-map-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ink-4);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+/* ---------- timeline (PART D) ---------- */
+
+.p-timeline { list-style: none; margin: 0; padding: 0; }
+.p-timeline li {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+.p-timeline li:first-child { border-top: 0; }
+.p-time {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+  flex: none;
+}
+
+/* ---------- forms & buttons ---------- */
+
+.p-field { margin-bottom: 12px; }
+.p-field label {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+  font-weight: 550;
+}
+
+/* ⚠ 16px minimum. Anything smaller and iOS Safari zooms the whole page the
+   moment the field takes focus, which strands the parent mid-form. */
+.p-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+.p-input:focus { outline: 2px solid var(--teal); outline-offset: -1px; border-color: var(--teal); }
+
+/* The OTP box: wide-spaced digits, numeric keypad on mobile. */
+.p-otp {
+  font-size: 30px;
+  letter-spacing: .5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding: 14px;
+}
+
+.p-btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 52px;
+  font-size: 16px;
+  font-weight: 650;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--teal);
+  background: var(--teal);
+  color: #fff;
+  cursor: pointer;
+  padding: 14px;
+}
+.p-btn:active { background: var(--teal-dark); }
+.p-btn.ghost  { background: var(--surface); color: var(--ink-2); border-color: var(--line); }
+.p-btn.danger { background: var(--surface); color: var(--danger); border-color: #F5CFCF; }
+
+.p-err {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.p-hint { color: var(--ink-3); font-size: 13px; line-height: 1.55; }
+
+.p-section-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--ink-3);
+  font-weight: 700;
+  margin: 20px 0 8px;
+}
+
+/* ---------- bottom tabs ---------- */
+
+.p-tabs {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 20;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.p-tab {
+  flex: 1;
+  min-height: 56px;                 /* safety-critical nav — bigger than 44 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-decoration: none;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+.p-tab.on { color: var(--teal-dark); }
+.p-tab-ico { font-size: 17px; line-height: 1; }
+
+/* ---------- login ---------- */
+
+.p-auth { max-width: 380px; margin: 8vh auto 0; }
+.p-auth-brand {
+  text-align: center;
+  margin-bottom: 22px;
+}
+.p-auth-brand .mk { font-size: 40px; }
+.p-auth-brand h1 { font-size: 21px; margin: 8px 0 4px; }
+
+.p-dev {
+  margin-top: 14px;
+  background: var(--warn-bg);
+  border: 1px dashed #E7C889;
+  color: var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
