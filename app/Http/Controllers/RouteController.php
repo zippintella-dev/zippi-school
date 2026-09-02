@@ -278,10 +278,17 @@ class RouteController extends Controller
         abort_unless($route->school_id === $this->activeSchool()->id, 403);
     }
 
+    /**
+     * Bell tiers in bell order. Grouped rather than DISTINCT because MySQL
+     * rejects `SELECT DISTINCT bell_tier ... ORDER BY start_time` with error
+     * 3065 -- see the full explanation on ChildController::tiers(), which must
+     * stay in agreement with this.
+     */
     private function tiers(): array
     {
         return $this->activeSchool()->bellTimes()
-            ->distinct()->orderBy('start_time')->pluck('bell_tier')->all();
+            ->select('bell_tier')->groupBy('bell_tier')
+            ->orderByRaw('MIN(start_time)')->pluck('bell_tier')->all();
     }
 
     /** PART O6 — fixed RT- prefix, zero-padded. Typing "3" yields "RT-03". */

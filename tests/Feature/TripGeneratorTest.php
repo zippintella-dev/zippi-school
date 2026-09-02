@@ -78,9 +78,23 @@ class TripGeneratorTest extends TestCase
             $this->assertNotEmpty($trip->route_schedule, 'A generated trip must carry a solved schedule.');
         }
 
+        // ⚠ Deduplicated in PHP, not in SQL, and deliberately so.
+        //
+        // This was `->distinct()->count(DB::raw('route_id || direction || bell_tier'))`.
+        // `||` concatenates in SQLite but is LOGICAL OR in MySQL, so on the
+        // engine the server actually runs, that expression collapsed twelve
+        // distinct keys into the single value 1 — and the assertion compared
+        // 12 against 1. The test was reporting a duplicate-trip bug that did
+        // not exist, while being incapable of detecting a real one.
+        //
+        // The generator itself groups in PHP (SchoolTripGenerator::childrenByTier),
+        // so asserting in PHP tests the same thing on every engine.
+        $keys = $this->trips()->get(['route_id', 'direction', 'bell_tier'])
+            ->map(fn ($t) => $t->route_id . '|' . $t->direction . '|' . $t->bell_tier);
+
         $this->assertSame(
-            $this->trips()->count(),
-            $this->trips()->distinct()->count(\DB::raw('route_id || direction || bell_tier')),
+            $keys->count(),
+            $keys->unique()->count(),
             'Trips must be unique on (route, direction, bell tier) for one service date.'
         );
     }

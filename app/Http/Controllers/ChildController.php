@@ -39,6 +39,33 @@ class ChildController extends Controller
     }
 
     /**
+     * Order children by class number, portably.
+     *
+     * ⚠ The cast keyword is driver-specific and this is NOT cosmetic. SQLite
+     * spells it INTEGER; MySQL has no INTEGER cast at all and rejects the
+     * statement outright:
+     *
+     *     SQLSTATE[42000]: Syntax error … near 'INTEGER), `name` asc limit 30'
+     *
+     * Local development runs SQLite (config/database.php defaults to it) and
+     * the server runs MySQL, so a hard-coded `CAST(grade AS INTEGER)` passed
+     * every local test and then 500'd the Students list, the Removed list and
+     * Restore on the only environments that actually serve a school. Found by
+     * the MySQL leg of CI, which exists for exactly this class of bug.
+     *
+     * Both spellings coerce a non-numeric class name ("LKG") to 0, so the
+     * ordering is unchanged — this is a portability fix, not a behaviour change.
+     * Named pre-primary classes are ranked properly by App\Support\GradeLevel,
+     * which is PHP-side and unaffected.
+     */
+    private function gradeOrder(): string
+    {
+        return DB::connection()->getDriverName() === 'sqlite'
+            ? 'CAST(grade AS INTEGER)'
+            : 'CAST(grade AS SIGNED)';
+    }
+
+    /**
      * Shared list query. `$scope` is 'active' or 'removed' — the ONLY difference
      * between the two pages, so they cannot drift apart in filtering or sorting.
      */
@@ -62,16 +89,19 @@ class ChildController extends Controller
                 'stopAssignments', fn ($a) => $a->where('route_id', $request->route_id)))
             ->when($request->get('unassigned') === '1',
                 fn ($q) => $q->whereDoesntHave('stopAssignments'))
-            ->orderByRaw('CAST(grade AS INTEGER)')->orderBy('name')
+            ->orderByRaw($this->gradeOrder())->orderBy('name')
             ->paginate(30)
             ->withQueryString();
 
         return [
             'children' => $children,
             'grades' => Child::where('school_id', $school->id)
-                            ->distinct()->orderByRaw('CAST(grade AS INTEGER)')->pluck('grade'),
+                            ->distinct()->orderByRaw($this->gradeOrder())->pluck('grade'),
             'routes' => $school->routes()->orderBy('code')->get(),
-            'tiers' => $school->bellTimes()->distinct()->orderBy('start_time')->pluck('bell_tier'),
+            // See tiers() below for why this is grouped rather than DISTINCT.
+            'tiers' => $school->bellTimes()
+                              ->select('bell_tier')->groupBy('bell_tier')
+                              ->orderByRaw('MIN(start_time)')->pluck('bell_tier'),
             'filters' => $request->only(['q', 'grade', 'tier', 'route_id', 'unassigned']),
             'total' => Child::where('school_id', $school->id)->where('status', 'active')->count(),
             'removedTotal' => Child::where('school_id', $school->id)
@@ -539,10 +569,32 @@ class ChildController extends Controller
         abort_unless($child->school_id === $this->activeSchool()->id, 403);
     }
 
+    /**
+     * The school's bell tiers, in the order the bells actually ring
+     * (Senior 07:40 → Middle 08:15 → Primary 08:45).
+     *
+     * ⚠ Grouped, not DISTINCT, and that is a portability fix rather than a
+     * preference. `SELECT DISTINCT bell_tier ... ORDER BY start_time` asks the
+     * engine to order rows by a column it has just collapsed away. SQLite picks
+     * an arbitrary row and answers; MySQL refuses outright:
+     *
+     *     SQLSTATE[HY000]: General error: 3065 Expression #1 of ORDER BY clause
+     *     is not in SELECT list ... incompatible with DISTINCT
+     *
+     * That 500'd the Students list, the Removed list and Restore on MySQL --
+     * i.e. on every environment that serves a real school, while passing every
+     * local SQLite test. MIN(start_time) states the intent the DISTINCT form
+     * only implied: order each tier by its earliest bell.
+     *
+     * ⚠ Three copies of this query exist (here, RouteController::tiers(), and
+     * inline in rosterPayload()). They must stay in agreement -- fix all three
+     * or none.
+     */
     private function tiers(): array
     {
         return $this->activeSchool()->bellTimes()
-            ->distinct()->orderBy('start_time')->pluck('bell_tier')->all();
+            ->select('bell_tier')->groupBy('bell_tier')
+            ->orderByRaw('MIN(start_time)')->pluck('bell_tier')->all();
     }
 
     /**
