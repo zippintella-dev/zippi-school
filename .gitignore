@@ -28,3 +28,10 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Firebase service account — a LIVE CREDENTIAL that can send push to every
+# family and read project data. The client configs (google-services.json,
+# GoogleService-Info.plist) are NOT secret and stay committed: they ship inside
+# the APK and CI needs them to build. This one never does.
+/storage/app/firebase/
+*-service-account*.json

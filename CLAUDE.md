@@ -506,6 +506,45 @@ recording a deletion would otherwise fail to record *what* was deleted.
 - **Pagination SVGs rendered page-sized** — see the No-Tailwind note above.
 - **`bell_tier` filter existed in the controller with no UI control** — only reachable
   by hand-editing the URL. Dropdown added.
+- **A MORNING absence switched off the AFTERNOON handover code.**
+  `FamilyCardBuilder` loaded the day's absences for *all* directions and tested
+  that one collection in both `show_handover_code` and `show_boarding_code`. So
+  "dropped at school by a parent, riding the bus home" — an ordinary school day
+  — lost its receiver verification at the drop stop (Invariant #1): the
+  attendant asks for a code the parent's app refuses to show, and the escalation
+  ladder ends with a child returned to school. The check is now scoped to the
+  trip's own direction (`$legAbsence`). The same day-wide thinking also pinned
+  the card to a morning trip the child was not on, so the afternoon leg could
+  never become current — trip selection now prefers legs the child is riding.
+  `test_a_morning_absence_leaves_the_afternoon_handover_code_alone` holds both.
+- **The morning boarding code was unreachable in the Flutter parent app.**
+  `PickupScreen` rendered it and `FamilyCard` carried it, but `home_screen.dart`
+  only ever offered a way in for `show_handover_code` — and that screen is not a
+  tab, so in the morning nothing led to it. Worse, `PickupScreen` popped itself
+  when `!showHandoverCode`, which is false all morning, so even reaching it
+  bounced you out on the next 10-second poll. The entry point now switches on
+  the direction, the pop tests both flags, and the header no longer says
+  "Afternoon pickup" over a morning code.
+- **The Fleet role picker showed DEMO assignments in a live session.** Both
+  `FleetStore.signIn()` and `RoleScreen` read
+  `roleLinks.isEmpty ? DemoData.assignments : roleLinks` unconditionally, and
+  `main.dart`'s restore passed no links (the keychain held only name/phone/token).
+  So every relaunch offered the crew "Route 12 / Route 7 · Silver Oak School" —
+  a school and buses that exist only in `demo_data.dart`. Picking one set
+  `assignment.role`, which gates whether the device renders any child-marking
+  control, while the token in hand belonged to a different staff row. Links are
+  now persisted and restored; the demo fallback is gated on `!isLive`; an empty
+  live picker says "sign in again". ⚠ **A real role link carries no route, bus
+  or bell** — those belong to today's trips. A picker card showing a route is
+  fabricated.
+- **The Fleet duty board said "No trips today · this vehicle has nothing
+  scheduled" when it had simply failed to reach the server.** An empty
+  `duties` list was treated as an answer; it is also what an unread board looks
+  like. The board now carries `dutiesCheckedAt`/`dutiesError` and separates
+  unreachable from empty. Same fix removed two smaller lies: the empty state's
+  "Refresh · checked HH:MM" button was a bare `setState` that fetched nothing
+  and printed the current clock, and a failed *read* was counted as a queued
+  *write*, so the banner promised to sync an update that did not exist.
 
 ## Six open decisions (block later phases)
 
