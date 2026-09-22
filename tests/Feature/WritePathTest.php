@@ -120,6 +120,55 @@ class WritePathTest extends TestCase
         $this->assertDatabaseHas('routes', ['code' => 'RT-07', 'name' => 'Test Route']);
     }
 
+    /**
+     * ⚠ THE EDITORS EXIST AND MUST BE FINDABLE.
+     *
+     * Both were already built and both were hidden inside a <details>. The stop
+     * one's summary was the stop's name in bold with no cue at all, so the page
+     * read as a list of read-only stops and the editor was asked for as a
+     * missing feature. A control nobody can find is, for every practical
+     * purpose, a control that does not exist.
+     */
+    public function test_the_route_page_offers_editing_for_the_route_and_its_stops(): void
+    {
+        $route = Route::where('school_id', School::first()->id)
+            ->whereHas('stops')->firstOrFail();
+        $stop = $route->stops()->firstOrFail();
+
+        $html = $this->actingAs($this->admin)
+            ->get("/routes/{$route->id}")->assertOk()->getContent();
+
+        // Both forms are on the page, aimed at the endpoints that already existed.
+        $this->assertStringContainsString('action="' . route('routes.update', $route) . '"', $html);
+        $this->assertStringContainsString('action="' . route('stops.update', $stop) . '"', $html);
+
+        // …and both say they are editors rather than looking like labels.
+        $this->assertStringContainsString('Edit route', $html);
+        $this->assertStringContainsString('>edit</span>', $html);
+    }
+
+    /** Editing a stop moves the pin the whole trip is solved against. */
+    public function test_a_stop_can_be_edited_from_the_route_page(): void
+    {
+        $stop = Route::where('school_id', School::first()->id)
+            ->whereHas('stops')->firstOrFail()->stops()->firstOrFail();
+
+        $this->actingAs($this->admin)
+            ->put("/stops/{$stop->id}", [
+                'name' => 'Renamed Gate',
+                'landmark' => 'Opposite the temple',
+                'latitude' => 17.4415495,
+                'longitude' => 78.3824698,
+            ])
+            ->assertRedirect();
+
+        $fresh = $stop->fresh();
+
+        $this->assertSame('Renamed Gate', $fresh->name);
+        $this->assertSame('Opposite the temple', $fresh->landmark);
+        $this->assertEqualsWithDelta(17.4415495, (float) $fresh->latitude, 0.000001);
+    }
+
     /** PART G1 — stops append in authored order and reorder deterministically. */
     public function test_stops_append_in_sequence_and_reorder(): void
     {

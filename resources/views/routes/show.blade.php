@@ -30,8 +30,14 @@
               <td><span class="avatar sq" style="width:24px;height:24px;flex:0 0 24px;font-size:10px">
                 {{ $s->sequence }}</span></td>
               <td>
+                {{-- ⚠ The editor was here all along, behind a summary that
+                     was just the stop's name in bold — nothing said clicking it
+                     opened anything, so the stop looked read-only and people
+                     asked for an edit option that already existed. --}}
                 <details>
-                  <summary style="cursor:pointer;font-weight:650">{{ $s->name }}</summary>
+                  <summary style="cursor:pointer;font-weight:650">{{ $s->name }}
+                    <span class="hint" style="font-weight:500;margin-left:6px">edit</span>
+                  </summary>
                   <form method="POST" action="{{ route('stops.update', $s) }}"
                         style="margin-top:9px;padding:10px;background:#FAFBFC;border-radius:8px">
                     @csrf @method('PUT')
@@ -116,7 +122,7 @@
 
     {{-- ---------- Route settings ---------- --}}
     <details class="panel">
-      <summary>Route settings <span class="hint">code, name, bell tier, mirroring</span></summary>
+      <summary>Edit route <span class="hint">code, name, bell tier, mirroring</span></summary>
       <div class="panel-body">
         <form method="POST" action="{{ route('routes.update', $route) }}">
           @csrf @method('PUT')

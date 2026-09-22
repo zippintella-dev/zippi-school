@@ -54,7 +54,7 @@
         <span>👤 {{ $am?->attendant?->name ?? 'No attendant' }}</span>
         <span>▭ {{ $am?->bus?->reg_no ?? 'No bus' }}</span>
         <span class="spacer" style="flex:1"></span>
-        <a href="{{ route('routes.show', $route) }}">Detail →</a>
+        <a href="{{ route('routes.show', $route) }}">Detail &amp; edit →</a>
       </div>
     </div>
   @endforeach
