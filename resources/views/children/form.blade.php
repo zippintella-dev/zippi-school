@@ -34,13 +34,26 @@
               <input class="input" name="grade" value="{{ old('grade', $child->grade) }}" required></div>
             <div class="field"><label>Section</label>
               <input class="input" name="section" value="{{ old('section', $child->section) }}"></div>
+            {{-- ⚠ ASSIGNED FROM THE GRADE, NOT CHOSEN.
+                 This was a free select, and bell_tier decides which staggered
+                 run a child rides: a grade-8 student saved as "Senior" is
+                 collected for the 07:40 bell instead of 08:15 — 35 minutes
+                 early — and sent home on the 14:40 dismissal instead of 15:15.
+                 It went wrong three times on real data.
+
+                 The server already rejects a tier that contradicts the grade,
+                 so every option in that dropdown was either the derived value
+                 or a validation error waiting to happen. A control whose only
+                 outcomes are "same as automatic" and "refused" should not be a
+                 control. It now shows what the school's own bell bands assign,
+                 live, and posts nothing. --}}
             <div class="field"><label>Bell tier</label>
-              <select class="input" name="bell_tier">
-                <option value="">— derive from grade —</option>
-                @foreach($tiers as $l)
-                  <option value="{{ $l }}" @selected(old('bell_tier', $child->bell_tier) === $l)>{{ $l }}</option>
-                @endforeach
-              </select></div>
+              <div class="input" id="tierBox" style="display:flex;align-items:center;min-height:42px">
+                <span id="tierValue" class="muted">— enter a grade —</span>
+              </div>
+              <div class="help" id="tierHelp">Set by the grade bands under
+                <a href="{{ route('settings') }}">Settings</a>.</div>
+            </div>
             <div class="field"><label>Fee zone</label>
               <input class="input" name="transport_fee_zone"
                      value="{{ old('transport_fee_zone', $child->transport_fee_zone) }}"></div>
@@ -208,4 +221,51 @@
   routeSel.addEventListener('change', function () { preAm = prePm = null; fill(); });
   fill();
 </script>
+
+{{-- Live tier preview. The SERVER decides — see ChildController::bellTierFor().
+     Ranking a class name is what GradeLevel exists for, and a JavaScript copy
+     of it would be a second place for the LKG bug to live. --}}
+<script>
+  (function () {
+    var grade = document.querySelector('input[name="grade"]');
+    var value = document.getElementById('tierValue');
+    var help  = document.getElementById('tierHelp');
+    if (!grade || !value) return;
+
+    var timer = null, last = null;
+
+    function show(text, cls) {
+      value.textContent = text;
+      value.className = cls;
+    }
+
+    function lookup() {
+      var g = grade.value.trim();
+      if (g === last) return;
+      last = g;
+
+      if (g === '') { show('— enter a grade —', 'muted'); help.textContent = ''; return; }
+
+      fetch('{{ route('children.bellTier') }}?grade=' + encodeURIComponent(g),
+            { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          show(d.tier || 'No tier covers this class', d.ok ? '' : 'danger');
+          // ⚠ The server's sentence verbatim: it names the band and the bell
+          // times, and when nothing matches it says the student will never be
+          // put on a bus — which is the whole point of showing this here rather
+          // than letting them find out at 07:30.
+          help.textContent = d.message || '';
+        })
+        .catch(function () { /* offline: the server still assigns on save */ });
+    }
+
+    grade.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(lookup, 250);
+    });
+    lookup();
+  })();
+</script>
+
 @endsection

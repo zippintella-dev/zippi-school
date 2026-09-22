@@ -69,6 +69,8 @@ Route::middleware('auth:web')->group(function () {
     /* ---------- Students (PART S1 step 4) ---------- */
     Route::get('/children',                [ChildController::class, 'index'])->name('children.index');
     Route::get('/children/removed', [ChildController::class, 'removed'])->name('children.removed');
+    // ⚠ BEFORE /children/{child}, or the router reads "bell-tier" as an id.
+    Route::get('/children/bell-tier',      [ChildController::class, 'bellTierFor'])->name('children.bellTier');
     Route::get('/children/create',         [ChildController::class, 'create'])->name('children.create');
     Route::post('/children',               [ChildController::class, 'store'])->name('children.store');
     Route::get('/children/{child}',        [ChildController::class, 'show'])->name('children.show');

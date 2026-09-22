@@ -598,6 +598,45 @@ class ChildController extends Controller
     }
 
     /**
+     * GET /children/bell-tier?grade=8 — what tier does this class ride?
+     *
+     * ⚠ THE FORM ASKS THE SERVER RATHER THAN WORKING IT OUT ITSELF.
+     *
+     * Resolving a grade to a tier means ranking the class name, and
+     * GradeLevel::rank() exists because that ranking was once a one-liner that
+     * read "LKG" as 0 — below Primary's grade_from of 1, so no tier matched and
+     * the child was never generated onto a bus at all. A JavaScript copy of
+     * that logic would be a second place for the same bug to live, drifting
+     * from the first the moment somebody adds a class name to one and not the
+     * other. One implementation, asked over the wire.
+     */
+    public function bellTierFor(Request $request)
+    {
+        $grade = (string) $request->query('grade', '');
+
+        if (trim($grade) === '') {
+            return response()->json(['ok' => false, 'tier' => null, 'message' => null]);
+        }
+
+        [$tier, $error] = $this->resolveBellTier($grade, null);
+
+        if (! $tier) {
+            return response()->json(['ok' => false, 'tier' => null, 'message' => $error]);
+        }
+
+        $band = $this->activeSchool()->bellTimes->first(fn ($b) => $b->bell_tier === $tier);
+
+        return response()->json([
+            'ok' => true,
+            'tier' => $tier,
+            'message' => 'Class ' . $grade . ' rides the ' . $tier . ' bell — '
+                . 'classes ' . $band->grade_from . '–' . $band->grade_to
+                . ', in at ' . substr((string) $band->start_time, 0, 5)
+                . ', out at ' . substr((string) $band->end_time, 0, 5) . '.',
+        ]);
+    }
+
+    /**
      * ⚠ THE BELL TIER MUST MATCH THE GRADE.
      *
      * `bell_tier` is one of the four keys, and it decides which staggered run a

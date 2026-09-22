@@ -158,4 +158,64 @@ class BellTierTest extends TestCase
                 "{$c->name} (class {$c->grade}) has tier {$c->bell_tier}, expected {$want}");
         }
     }
+
+    /**
+     * ⚠ THE FORM ASKS THE SERVER WHICH TIER A GRADE RIDES.
+     *
+     * Resolving a class name to a tier means ranking it, and GradeLevel exists
+     * because that ranking once read "LKG" as 0 — below Primary's grade_from of
+     * 1 — so no tier matched and the child was never generated onto a bus. A
+     * JavaScript copy of that logic would be a second place for the same bug to
+     * live. This endpoint is what keeps it in one place.
+     */
+    public function test_the_lookup_names_the_tier_and_its_bell_times(): void
+    {
+        $body = $this->getJson('/children/bell-tier?grade=8')
+            ->assertOk()->json();
+
+        $this->assertTrue($body['ok']);
+        $this->assertSame('Middle', $body['tier']);
+        // The sentence is the product: it names the band and both bells, so the
+        // office can see WHY before saving rather than at 07:30.
+        $this->assertStringContainsString('Middle bell', $body['message']);
+        $this->assertStringContainsString('08:15', $body['message']);
+    }
+
+    public function test_the_lookup_handles_a_named_pre_primary_class(): void
+    {
+        // Primary covers Nursery upward in this fixture's setUp.
+        $body = $this->getJson('/children/bell-tier?grade=LKG')->assertOk()->json();
+
+        $this->assertTrue($body['ok']);
+        $this->assertSame('Primary', $body['tier']);
+    }
+
+    public function test_the_lookup_says_plainly_when_no_tier_covers_the_class(): void
+    {
+        $body = $this->getJson('/children/bell-tier?grade=Zebra')->assertOk()->json();
+
+        $this->assertFalse($body['ok']);
+        $this->assertNull($body['tier']);
+        // ⚠ Not silence. An unmatched class is a student who would never be put
+        // on a bus, and the office must be told at the moment they type it.
+        $this->assertStringContainsString('never', $body['message']);
+    }
+
+    public function test_an_empty_grade_asks_for_nothing(): void
+    {
+        $body = $this->getJson('/children/bell-tier?grade=')->assertOk()->json();
+
+        $this->assertFalse($body['ok']);
+        $this->assertNull($body['tier']);
+        $this->assertNull($body['message']);
+    }
+
+    /** The form no longer offers a tier to choose — it shows the one assigned. */
+    public function test_the_student_form_does_not_offer_a_tier_dropdown(): void
+    {
+        $html = $this->get('/children/create')->assertOk()->getContent();
+
+        $this->assertStringNotContainsString('name="bell_tier"', $html);
+        $this->assertStringContainsString('tierValue', $html);
+    }
 }
