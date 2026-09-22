@@ -286,6 +286,76 @@ class ParentApiTest extends TestCase
     }
 
     /**
+     * ⚠ THE DIGITS WAIT FOR THE BUS TO ACTUALLY LEAVE.
+     *
+     * show_handover_code says the afternoon leg is the relevant one — that is
+     * what puts the control on the family card. It does NOT mean "mint the
+     * code now". A live 4-digit value that can release a child used to appear
+     * the moment the afternoon leg became current, which on a normal day is
+     * mid-morning: hours of a release code sitting on a screen in a pocket, on
+     * a desk, in a photo. The app has always carried the right sentence for the
+     * waiting state; only the server disagreed with it.
+     */
+    public function test_the_handover_code_is_withheld_until_the_trip_starts(): void
+    {
+        $today = Carbon::now('Asia/Kolkata')->toDateString();
+
+        $row = SchoolTripChild::where('child_id', $this->child->id)
+            ->whereHas('trip', fn ($q) => $q->where('service_date', $today)
+                                             ->where('direction', 'Afternoon'))
+            ->firstOrFail();
+
+        $row->trip->update(['status' => 'scheduled']);
+
+        $waiting = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        // The control is there — the parent can see a code is coming...
+        $this->assertTrue($waiting['show_handover_code']);
+        // ...but there is nothing to read off the screen yet.
+        $this->assertNull($waiting['handover_code']);
+
+        $row->trip->update(['status' => 'started', 'started_at' => now()]);
+
+        $running = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        $this->assertTrue($running['show_handover_code']);
+        $this->assertMatchesRegularExpression('/^\d{4}$/', $running['handover_code']);
+    }
+
+    /** The morning boarding code follows the same rule. */
+    public function test_the_boarding_code_is_withheld_until_the_trip_starts(): void
+    {
+        $today = Carbon::now('Asia/Kolkata')->toDateString();
+
+        $row = SchoolTripChild::where('child_id', $this->child->id)
+            ->whereHas('trip', fn ($q) => $q->where('service_date', $today)
+                                             ->where('direction', 'Morning'))
+            ->firstOrFail();
+
+        $row->update(['status' => 'pending']);
+        $row->trip->update(['status' => 'scheduled']);
+
+        $waiting = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        $this->assertTrue($waiting['show_boarding_code']);
+        $this->assertNull($waiting['boarding_code']);
+
+        $row->trip->update(['status' => 'started', 'started_at' => now()]);
+
+        $running = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        $this->assertMatchesRegularExpression('/^\d{4}$/', $running['boarding_code']);
+    }
+
+    /**
      * ⚠ A MORNING ABSENCE MUST NOT TAKE THE AFTERNOON HANDOVER CODE AWAY.
      *
      * "Dropped at school by a parent, riding the bus home" is an ordinary
@@ -319,6 +389,12 @@ class ParentApiTest extends TestCase
         ]);
 
         $morning->update(['status' => 'absent']);
+
+        // The afternoon bus is out, which is when its code is minted at all.
+        SchoolTripChild::where('child_id', $this->child->id)
+            ->whereHas('trip', fn ($q) => $q->where('service_date', $today)
+                                             ->where('direction', 'Afternoon'))
+            ->firstOrFail()->trip->update(['status' => 'started', 'started_at' => now()]);
 
         $body = $this->asGuardian()
             ->getJson('/api/parent/child/' . $this->child->id)

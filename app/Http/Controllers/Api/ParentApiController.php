@@ -58,16 +58,31 @@ class ParentApiController extends Controller
         $model = $this->myChild($request, $child);
         $card = $this->cards->build($model);
 
-        // PART A7 — the plaintext code is minted only when there is an
-        // afternoon trip to use it on, so we never rotate a code nobody needs.
-        $card['handover_code'] = $card['show_handover_code']
+        // ⚠ THE DIGITS APPEAR ONLY ONCE THE BUS IS ACTUALLY RUNNING.
+        //
+        // The show_* flags say which code is RELEVANT to this leg; they are what
+        // puts the control on the family card. Whether the plaintext is minted
+        // is a separate question, and the answer is: not until the trip has
+        // started.
+        //
+        // A live 4-digit code that can release a child sat on a parent's screen
+        // from the moment the afternoon leg became current — most of the school
+        // day — which is a long window for somebody to read it over a shoulder,
+        // photograph it, or pass it on. The parent app has carried the right
+        // sentence for this state all along ("The code appears once the
+        // afternoon trip is under way"); only the server disagreed with it.
+        //
+        // It also stops a code being rotated for a trip that never runs.
+        $running = ($card['trip']['status'] ?? null) === 'started';
+
+        $card['handover_code'] = $card['show_handover_code'] && $running
             ? $model->todaysHandoverCode()
             : null;
 
-        // PART A7 (extended) — the morning boarding code. Same minting rule, and
-        // the two are never both non-null: show_handover_code and
-        // show_boarding_code are mutually exclusive on the trip's direction.
-        $card['boarding_code'] = $card['show_boarding_code']
+        // PART A7 (extended) — the morning boarding code. Same rule, and the two
+        // are never both non-null: show_handover_code and show_boarding_code are
+        // mutually exclusive on the trip's direction.
+        $card['boarding_code'] = $card['show_boarding_code'] && $running
             ? $model->todaysBoardingCode()
             : null;
 
