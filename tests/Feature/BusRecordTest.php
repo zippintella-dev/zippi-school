@@ -55,6 +55,44 @@ class BusRecordTest extends TestCase
             ->assertSee('Insurance expired 6d ago');
     }
 
+    /**
+     * ⚠ Same gap as the crew record: `PUT buses/{bus}` existed with no form
+     * reaching it, so a renewed PUC or a replaced insurance policy could not be
+     * recorded — and PART K15 goes on withholding the vehicle, generating
+     * `no_bus_assigned` every night, with the trip still created and no bus on
+     * it.
+     */
+    public function test_a_vehicle_can_be_edited_from_its_record(): void
+    {
+        $bus = Bus::first();
+
+        $bus->forceFill(['puc_expiry' => null, 'speed_governor_expiry' => null])->save();
+        $this->assertNotEmpty($bus->fresh()->complianceBlockers());
+
+        $this->actingAs($this->admin)
+            ->get("/buses/{$bus->id}")
+            ->assertOk()
+            ->assertSee('Edit vehicle')
+            ->assertSee('action="' . route('buses.update', $bus) . '"', false);
+
+        $this->actingAs($this->admin)
+            ->put("/buses/{$bus->id}", [
+                'reg_no' => $bus->reg_no,
+                'capacity' => $bus->capacity,
+                'puc_expiry' => '2027-03-01',
+                'speed_governor_expiry' => '2027-03-01',
+                'fitness_expiry' => '2027-03-01',
+                'permit_expiry' => '2027-03-01',
+                'insurance_expiry' => '2027-03-01',
+            ])
+            ->assertRedirect();
+
+        $fresh = $bus->fresh();
+
+        $this->assertSame('2027-03-01', (string) $fresh->puc_expiry);
+        $this->assertEmpty($fresh->complianceBlockers());
+    }
+
     public function test_a_bus_at_another_school_is_not_reachable(): void
     {
         $other = School::create(['name' => 'Another School', 'code' => 'OTHER-2']);

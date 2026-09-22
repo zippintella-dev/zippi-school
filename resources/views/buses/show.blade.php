@@ -114,6 +114,89 @@
         </table>
       </div>
     </div>
+
+    {{-- ----------------------------------------------------------------
+         ⚠ SAME REASON AS THE CREW FORM: VEHICLE PAPERWORK EXPIRES.
+
+         BusController@update() and PUT buses/{bus} existed with nothing in the
+         dashboard posting to them. A PUC renewed this morning, an insurance
+         policy replaced, a speed governor recertified — none of it could be
+         recorded, so PART K15 went on withholding the vehicle and the trip
+         generated with `no_bus_assigned` every night.
+    ---------------------------------------------------------------- --}}
+    <div class="card">
+      <div class="card-head"><h2>Edit vehicle</h2></div>
+      <div class="card-body">
+        <form method="POST" action="{{ route('buses.update', $bus) }}">
+          @csrf @method('PUT')
+
+          <div class="field"><label>Registration number</label>
+            <input class="input" name="reg_no" required
+                   value="{{ old('reg_no', $bus->reg_no) }}"></div>
+
+          <div class="field"><label>Model</label>
+            <input class="input" name="model"
+                   value="{{ old('model', $bus->model) }}"></div>
+
+          <div class="field"><label>Capacity</label>
+            <input class="input" type="number" min="6" max="80" name="capacity" required
+                   value="{{ old('capacity', $bus->capacity) }}"></div>
+
+          <div class="field"><label>GPS device id</label>
+            <input class="input" name="gps_device_id"
+                   value="{{ old('gps_device_id', $bus->gps_device_id) }}">
+            {{-- Until a hardware unit exists the crew's handset is the tracker
+                 — see the ping endpoint. This is for when one is fitted. --}}
+            <div class="hint">Optional. The crew's phone is the tracker until a unit is fitted.</div>
+          </div>
+
+          <div class="check-row">
+            <input type="checkbox" id="is_ev" name="is_ev" value="1"
+                   @checked(old('is_ev', $bus->is_ev))>
+            <label for="is_ev" style="margin:0">Electric vehicle</label>
+          </div>
+
+          <div class="check-row">
+            <input type="checkbox" id="has_camera" name="has_camera" value="1"
+                   @checked(old('has_camera', $bus->has_camera))>
+            <label for="has_camera" style="margin:0">Has a camera</label>
+          </div>
+
+          <h3 style="margin:22px 0 10px;font-size:13px;letter-spacing:.4px"
+              class="muted">DOCUMENTS</h3>
+          {{-- ⚠ A blank date is not "fine", it is "not recorded", and PART K15
+               treats it exactly as it treats an expired one: the vehicle is
+               withheld from the next generation run. --}}
+
+          <div class="field"><label>Fitness expiry</label>
+            <input class="input" type="date" name="fitness_expiry"
+                   value="{{ old('fitness_expiry', $bus->fitness_expiry) }}"></div>
+
+          <div class="field"><label>Permit expiry</label>
+            <input class="input" type="date" name="permit_expiry"
+                   value="{{ old('permit_expiry', $bus->permit_expiry) }}"></div>
+
+          <div class="field"><label>Insurance expiry</label>
+            <input class="input" type="date" name="insurance_expiry"
+                   value="{{ old('insurance_expiry', $bus->insurance_expiry) }}"></div>
+
+          <div class="field"><label>PUC expiry</label>
+            <input class="input" type="date" name="puc_expiry"
+                   value="{{ old('puc_expiry', $bus->puc_expiry) }}"></div>
+
+          <div class="field"><label>Speed governor expiry</label>
+            <input class="input" type="date" name="speed_governor_expiry"
+                   value="{{ old('speed_governor_expiry', $bus->speed_governor_expiry) }}"></div>
+
+          <button class="btn primary" type="submit">Save changes</button>
+          <div class="hint" style="margin-top:10px">
+            Trips already generated keep the vehicle they were solved with.
+            Run <code>school:generate-trips --force</code> to re-solve today's.
+          </div>
+        </form>
+      </div>
+    </div>
+
   </div>
 
   <div class="col">

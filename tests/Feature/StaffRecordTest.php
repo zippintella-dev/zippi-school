@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\School;
 use App\Models\SchoolStaff;
 use App\Models\User;
 use Database\Seeders\PhoenixGreensSeeder;
@@ -42,6 +43,84 @@ class StaffRecordTest extends TestCase
             // The whole point of the screen: a number somebody can actually ring.
             ->assertSee($member->phone)
             ->assertSee('Compliance');
+    }
+
+    /**
+     * ⚠ THE FORM AND THE ENDPOINT MUST BOTH EXIST.
+     *
+     * `PUT staff/{member}` and StaffController@update() shipped with no form
+     * anywhere in the dashboard posting to them, so compliance could never be
+     * corrected once entered. Compliance EXPIRES — a licence renews annually,
+     * a police check comes back, a medical certificate is reissued — and
+     * PART K15 withholds a crew member whose paperwork has lapsed from every
+     * trip generated afterwards. The only visible symptom is `attendant = NONE`
+     * on a trip nobody realises is short-staffed, which is exactly what
+     * happened on the first real onboarding.
+     */
+    public function test_a_crew_member_can_be_edited_from_their_record(): void
+    {
+        $member = SchoolStaff::where('role', 'attendant')->firstOrFail();
+
+        $member->forceFill([
+            'police_verification_status' => 'pending',
+            'medical_fitness_expiry' => null,
+        ])->save();
+
+        $this->assertNotEmpty($member->fresh()->complianceBlockers());
+
+        // The form is on the page, aimed at the endpoint that already existed.
+        $this->actingAs($this->admin)
+            ->get("/staff/{$member->id}")
+            ->assertOk()
+            ->assertSee('Edit crew member')
+            ->assertSee('action="' . route('staff.update', $member) . '"', false);
+
+        $this->actingAs($this->admin)
+            ->put("/staff/{$member->id}", [
+                'role' => $member->role,
+                'name' => $member->name,
+                'phone' => $member->phone,
+                'police_verification_status' => 'verified',
+                'police_verified_on' => '2026-07-01',
+                'medical_fitness_expiry' => '2027-07-01',
+            ])
+            ->assertRedirect();
+
+        $fresh = $member->fresh();
+
+        $this->assertSame('verified', $fresh->police_verification_status);
+        $this->assertSame('2027-07-01', (string) $fresh->medical_fitness_expiry);
+
+        // The point of the edit: they are dispatchable again.
+        $this->assertEmpty($fresh->complianceBlockers());
+    }
+
+    public function test_a_school_user_cannot_edit_another_schools_crew(): void
+    {
+        $other = School::create([
+            'name' => 'Another School', 'code' => 'AS2',
+            'timezone' => 'Asia/Kolkata', 'status' => 'active',
+        ]);
+
+        $intruder = User::create([
+            'name' => 'Other Office', 'role' => 'school_user',
+            'email' => 'other@school.test', 'password' => bcrypt('secret'),
+            'school_id' => $other->id, 'status' => 'active',
+        ]);
+
+        $member = SchoolStaff::where('role', 'driver')->firstOrFail();
+
+        // ⚠ update() carries its own abort_unless. Nothing proved it until now,
+        // and a crew edit reachable across schools would let one school revoke
+        // another's driver.
+        $this->actingAs($intruder)
+            ->put("/staff/{$member->id}", [
+                'role' => 'driver', 'name' => 'Hijacked', 'phone' => '9000000001',
+                'police_verification_status' => 'rejected',
+            ])
+            ->assertForbidden();
+
+        $this->assertNotSame('Hijacked', $member->fresh()->name);
     }
 
     public function test_the_crew_list_still_masks(): void
