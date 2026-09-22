@@ -48,19 +48,43 @@ class FamilyCardBuilder
             ->whereHas('trip', fn ($q) => $q->where('service_date', $today))
             ->get();
 
+        // ⚠ A LEG THE CHILD IS NOT ON IS NOT "the trip that matters now".
+        //
+        // Selection used to run over every row, so a child absent in the
+        // morning had their card pinned to that morning trip all day — it stays
+        // `scheduled` from their point of view and never becomes the most
+        // recent — and the afternoon run they ARE on could not become current.
+        // Riding legs are considered first; if every leg is absent, fall back to
+        // all of them so the card still describes the day.
+        $riding = $rows->where('status', '!=', 'absent');
+        $pool = $riding->isNotEmpty() ? $riding : $rows;
+
         // The trip that matters now: one that's running, else the next
         // scheduled, else the most recent — so an evening card still shows the
         // afternoon run rather than reverting to the finished morning one.
-        $row = $rows->first(fn ($r) => $r->trip->status === 'started')
-            ?? $rows->sortBy(fn ($r) => $r->trip->scheduled_start_at)
+        $row = $pool->first(fn ($r) => $r->trip->status === 'started')
+            ?? $pool->sortBy(fn ($r) => $r->trip->scheduled_start_at)
                     ->first(fn ($r) => $r->trip->status === 'scheduled')
-            ?? $rows->sortByDesc(fn ($r) => $r->trip->scheduled_start_at)->first();
+            ?? $pool->sortByDesc(fn ($r) => $r->trip->scheduled_start_at)->first();
 
         $trip = $row?->trip;
 
         $absence = SchoolChildAbsence::where('child_id', $child->id)
             ->where('service_date', $today)      // raw string (L1)
             ->get();
+
+        // ⚠ ABSENCE IS PER DIRECTION, AND THE CODE FLAGS MUST SAY SO.
+        //
+        // Both flags below tested the whole day's absences, so a MORNING
+        // absence switched off the AFTERNOON handover code — the receiver
+        // verification at the drop stop (Invariant #1). "Not on the bus this
+        // morning, riding home this afternoon" is an ordinary school day, and
+        // it was exactly the day that lost its code: the attendant asks for a
+        // number the parent's app refuses to show, and the escalation ladder
+        // ends with a child returned to school over a lift to school.
+        $legAbsence = $trip
+            ? $absence->where('direction', $trip->direction)
+            : $absence;
 
         $terminal = $row && in_array($row->status, self::TERMINAL, true);
 
@@ -99,7 +123,7 @@ class FamilyCardBuilder
             // PART A7 — afternoon only, and only while the child is still to be
             // collected. A code left on screen after handover is just noise.
             'show_handover_code' => (bool) ($trip && ! $trip->isMorning()
-                && ! $terminal && $absence->isEmpty()),
+                && ! $terminal && $legAbsence->isEmpty()),
             // PART A7 (extended) — the MORNING boarding code, and a different
             // value from the handover code above. Never both at once: the two
             // conditions are mutually exclusive on isMorning().
@@ -111,7 +135,7 @@ class FamilyCardBuilder
             // 'boarded' is not a terminal status but is exactly when this
             // should disappear.
             'show_boarding_code' => (bool) ($trip && $trip->isMorning()
-                && $absence->isEmpty()
+                && $legAbsence->isEmpty()
                 && (! $row || $row->status === 'pending')),
             'trip' => $trip ? [
                 'id' => $trip->id,

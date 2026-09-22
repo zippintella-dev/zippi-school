@@ -286,6 +286,56 @@ class ParentApiTest extends TestCase
     }
 
     /**
+     * ⚠ A MORNING ABSENCE MUST NOT TAKE THE AFTERNOON HANDOVER CODE AWAY.
+     *
+     * "Dropped at school by a parent, riding the bus home" is an ordinary
+     * school day. The card's absence check was day-wide rather than per
+     * direction, so that morning row switched off the afternoon code — the
+     * receiver verification at the drop stop, which is Invariant #1. The
+     * attendant then asks for a number the parent's app is refusing to show,
+     * no other verification is to hand, and the escalation ladder ends with a
+     * child returned to school because somebody gave them a lift that morning.
+     *
+     * The same day-wide check also pinned the card to the morning trip the
+     * child is not on, so the afternoon run could never become current.
+     */
+    public function test_a_morning_absence_leaves_the_afternoon_handover_code_alone(): void
+    {
+        $today = Carbon::now('Asia/Kolkata')->toDateString();
+
+        $morning = SchoolTripChild::where('child_id', $this->child->id)
+            ->whereHas('trip', fn ($q) => $q->where('service_date', $today)
+                                             ->where('direction', 'Morning'))
+            ->firstOrFail();
+
+        // Absent for the MORNING only — exactly what the parent app writes.
+        SchoolChildAbsence::create([
+            'child_id' => $this->child->id,
+            'service_date' => $today,          // raw string (PART L1)
+            'direction' => 'Morning',
+            'bell_tier' => $this->child->bell_tier,
+            'marked_by' => 'parent',
+            'approval_status' => 'approved',
+        ]);
+
+        $morning->update(['status' => 'absent']);
+
+        $body = $this->asGuardian()
+            ->getJson('/api/parent/child/' . $this->child->id)
+            ->assertOk()->json('child');
+
+        // The card follows the leg the child is actually on.
+        $this->assertSame('Afternoon', $body['trip']['direction']);
+
+        $this->assertTrue($body['absent']);
+        $this->assertSame(['Morning'], $body['absent_directions']);
+
+        // …and the afternoon code is untouched.
+        $this->assertTrue($body['show_handover_code']);
+        $this->assertMatchesRegularExpression('/^\d{4}$/', $body['handover_code']);
+    }
+
+    /**
      * PART A7 (extended) — the morning boarding code, which the guardian reads
      * out to the attendant at the stop.
      *
