@@ -252,4 +252,17 @@ class CrewAssignment {
         staffId: (json['staff_id'] as num?)?.toInt(),
         token: json['token'] as String?,
       );
+
+  /// Back to the server's own shape, so a restored session re-reads through
+  /// [CrewAssignment.fromJson] — one parser, not two that can disagree.
+  ///
+  /// ⚠ This is written to the KEYCHAIN, token included. The links are the only
+  /// record of which roles this phone signed in for, and they must survive a
+  /// relaunch: without them the app has a token and no idea what it is for.
+  Map<String, dynamic> toJson() => {
+        'staff_id': staffId,
+        'role': role == FleetRole.driver ? 'driver' : 'attendant',
+        'school': {'name': schoolName},
+        'token': token,
+      };
 }

@@ -282,6 +282,21 @@ class FleetStore extends ChangeNotifier {
 
   List<DutyTrip> duties = const [];
 
+  /// When the board was last read from the server successfully.
+  ///
+  /// ⚠ NULL MEANS "NEVER LOADED", AND THAT IS NOT THE SAME AS "NO TRIPS". An
+  /// empty [duties] on its own cannot tell the two apart, and the difference is
+  /// the whole message: "this vehicle has nothing scheduled, call the office"
+  /// versus "I could not ask". The first, shown when the second is true, sends
+  /// a crew member home from a bus that has a run on it.
+  DateTime? dutiesCheckedAt;
+
+  /// Why the last attempt to read the board failed, in the sentence the crew
+  /// should see. Null once a read succeeds.
+  String? dutiesError;
+
+  bool get dutiesLoaded => dutiesCheckedAt != null;
+
   TripSession? session;
 
   /// The open emergency, if any.
@@ -315,13 +330,29 @@ class FleetStore extends ChangeNotifier {
   }) {
     crewName = name;
     phone = phoneNumber;
-    roleLinks = links.isEmpty ? DemoData.assignments : links;
+
+    // ⚠ NEVER SUBSTITUTE THE WALKTHROUGH FIXTURES IN A LIVE SESSION. This read
+    // `links.isEmpty ? DemoData.assignments : links`, unconditionally — and the
+    // restore path passes no links, so every relaunch of a real install offered
+    // the crew Route 12 and Route 7 at Silver Oak School: a school, two routes
+    // and two buses that exist only in `demo_data.dart`.
+    //
+    // It is worse than a cosmetic wrong label. Picking a fabricated card sets
+    // `assignment.role`, and that decides whether this device renders any
+    // child-marking control at all — while the bearer token in hand belongs to
+    // whichever staff row the crew member actually signed in as. An attendant
+    // who picked the invented "Driver" card got an app that refused to let them
+    // mark a child, on a bus where they are the only person who can.
+    //
+    // In demo mode there is no server to ask, and the fixtures ARE the data.
+    roleLinks = links.isNotEmpty ? links : (isLive ? const [] : DemoData.assignments);
 
     if (token != null) api?.token = token;
 
     // Fire-and-forget: a failed keychain write costs one extra sign-in
     // tomorrow, and blocking the crew on it at 6:40 AM costs a bus.
     auth?.save(phone: phoneNumber, name: name, token: token);
+    auth?.saveLinks(roleLinks);
 
     notifyListeners();
   }
@@ -343,19 +374,50 @@ class FleetStore extends ChangeNotifier {
   }
 
   /// Today's board. Safe to call repeatedly — it is the pull-to-refresh path.
+  ///
+  /// ⚠ IT DOES NOT THROW, AND IT DOES NOT CLEAR A BOARD IT ALREADY HAS. A
+  /// failure is recorded in [dutiesError] for the screen to render, because
+  /// this is called from a button press and from pull-to-refresh, where a
+  /// thrown transport exception reaches nobody — it was swallowed by the
+  /// framework, and the crew were left reading an empty board with no
+  /// explanation on it.
   Future<void> refreshDuties() async {
     if (!isLive) {
       duties = DemoData.duties(DateTime.now());
+      dutiesCheckedAt = DateTime.now();
+      dutiesError = null;
       notifyListeners();
       return;
     }
 
-    await _guarded(() async {
-      final json = await api!.duties();
-      duties = ((json['trips'] as List?) ?? const [])
-          .map((t) => DutyTrip.fromJson(t as Map<String, dynamic>))
-          .toList();
-    });
+    try {
+      await _guarded(() async {
+        final json = await api!.duties();
+        duties = ((json['trips'] as List?) ?? const [])
+            .map((t) => DutyTrip.fromJson(t as Map<String, dynamic>))
+            .toList();
+        dutiesCheckedAt = DateTime.now();
+        dutiesError = null;
+      }, read: true);
+    } on FleetTransportException catch (e) {
+      // ⚠ NOT the transport's own sentence when the wire is down. That one is
+      // written for a write — "carry on, this will sync when you are back" —
+      // and a board that never loaded has nothing to sync and nothing to carry
+      // on with. Everything else (a 502, an HTML error page) keeps its message,
+      // because it names something the crew or ops can act on.
+      dutiesError = e.isOffline
+          ? 'No connection, so today\'s trips have not loaded. This is not '
+              '"no trips" — it is "not known yet". Try again when you have '
+              'signal.'
+          : e.message;
+    } on SafetyViolation catch (e) {
+      // A 4xx on a *read* is not a safety refusal about a child — it is an
+      // expired token or a bad request. Show its sentence rather than a
+      // blocking sheet about a rule nobody broke.
+      dutiesError = e.message;
+    }
+
+    notifyListeners();
   }
 
   /// Back to the role picker — a crew member moved to another bus mid-day, or
@@ -367,6 +429,9 @@ class FleetStore extends ChangeNotifier {
     assignment = null;
     session = null;
     duties = const [];
+    // The board is not "loaded and empty" for the next role — it is unread.
+    dutiesCheckedAt = null;
+    dutiesError = null;
     notifyListeners();
   }
 
@@ -384,6 +449,8 @@ class FleetStore extends ChangeNotifier {
     assignment = null;
     roleLinks = const [];
     duties = const [];
+    dutiesCheckedAt = null;
+    dutiesError = null;
     session = null;
     sos = null;
 
@@ -399,7 +466,8 @@ class FleetStore extends ChangeNotifier {
       return;
     }
 
-    await _guarded(() async => _applyTrip(await api!.trip(trip.id)));
+    await _guarded(() async => _applyTrip(await api!.trip(trip.id)),
+        read: true);
 
     // Joining a trip somebody else started — the second device pushes too.
     if (session?.isRunning ?? false) unawaited(startPositionPushing());
@@ -411,7 +479,8 @@ class FleetStore extends ChangeNotifier {
     final id = session?.trip.id;
     if (!isLive || id == null) return;
 
-    await _guarded(() async => _applyTrip(await api!.trip(id)), quiet: true);
+    await _guarded(() async => _applyTrip(await api!.trip(id)),
+        quiet: true, read: true);
   }
 
   void _applyTrip(Map<String, dynamic> json) {
@@ -524,7 +593,18 @@ class FleetStore extends ChangeNotifier {
   /// ask"; it must never be presented as "the rules say no", and it must never
   /// be swallowed into a success. It flips the offline banner and counts the
   /// write, and the caller's optimistic UI does not advance.
-  Future<T?> _guarded<T>(Future<T> Function() body, {bool quiet = false}) async {
+  ///
+  /// ⚠ [read] MARKS A CALL THAT CARRIES NOTHING TO SYNC. The queued count is a
+  /// count of *writes* the server has not got. A failed board or trip fetch
+  /// used to increment it too, so a crew member who opened the app in a dead
+  /// zone was told "1 update will sync when you are back" about an update that
+  /// did not exist — and a counter that invents work is a counter nobody
+  /// believes on the morning it is counting a real boarding.
+  Future<T?> _guarded<T>(
+    Future<T> Function() body, {
+    bool quiet = false,
+    bool read = false,
+  }) async {
     if (!quiet) {
       busy = true;
       notifyListeners();
@@ -542,7 +622,7 @@ class FleetStore extends ChangeNotifier {
     } on FleetTransportException catch (e) {
       if (e.isOffline) {
         offline = true;
-        queuedEvents++;
+        if (!read) queuedEvents++;
       }
 
       if (!quiet) rethrow;

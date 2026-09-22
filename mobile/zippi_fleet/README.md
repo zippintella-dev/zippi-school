@@ -16,7 +16,7 @@ cd ~/zippi-school && php artisan serve        # http://localhost:8000
 # 2 · the app
 cd ~/zippi-school/mobile/zippi_fleet
 flutter pub get
-flutter run                                   # 59 tests: flutter test
+flutter run                                   # 65 tests: flutter test
 
 # a real handset on your Wi-Fi cannot reach 10.0.2.2
 flutter run --dart-define=ZIPPI_API_BASE=http://192.168.0.246:8000
@@ -221,10 +221,62 @@ children is a crew member who taps "deny" to make it go away.
   not replayed. The app tells the truth about what has not reached the server;
   it does not yet get it there by itself.
 
+## ⚠ The walkthrough fixtures are never a stand-in for real data
+
+`demo_data.dart` exists for `ZIPPI_DEMO=true` — Route 12 and Route 7 at "Silver
+Oak School", buses KA 05 MX 2211 and KA 05 KL 8830. **None of it may appear in a
+live session, ever.**
+
+It did. Two places read `roleLinks.isEmpty ? DemoData.assignments : roleLinks`
+unconditionally — `FleetStore.signIn()` and `RoleScreen` — and the restore path
+in `main.dart` passed no links at all, because the keychain only held a name, a
+phone and a token. So every relaunch of a real install offered the crew two
+invented cards: a driver link for a route at a school they have never worked at.
+
+It is not a cosmetic bug. Picking a card sets `assignment.role`, and that decides
+whether the device renders **any child-marking control** — while the bearer token
+in hand belongs to whichever staff row they actually signed in as. An attendant
+who picked the invented driver card got an app that refused to let them mark a
+child, on a bus where they are the only person who can.
+
+The fix, in three parts: the links are persisted to the keychain at sign-in and
+restored on launch (`AuthStore.saveLinks`/`links`, round-tripping through
+`CrewAssignment.toJson`/`fromJson` so there is one parser); the demo fallback is
+gated on `!isLive`; and a live session with no links gets an honest "sign in
+again" screen instead of a fabricated picker. Three tests in the `Role links`
+group hold it.
+
+**How to tell a real card from a fabricated one at a glance:** a real role link
+carries *no route, no bus and no bell* — those belong to today's trips, which the
+duty board fetches after a role is picked. A picker card showing "Route 7 · North
+loop · KA 05 KL 8830" is fiction.
+
+## ⚠ "No trips today" is a claim about the timetable, not about the network
+
+The duty board has four states, and the two that were missing are the ones a
+crew member hits on a bad morning. An empty `FleetStore.duties` is *also* what a
+board looks like before it has ever loaded, and after a fetch died in a dead
+zone — so the board tracks `dutiesCheckedAt` / `dutiesError` alongside the list,
+and only says "This vehicle has nothing scheduled, call your transport office"
+when the server actually said so. Unreachable gets `ErrorState` and a retry that
+fetches; the first load gets a line of text, never a spinner.
+
+Three rules hold it together, each with a test:
+
+- A **read** that fails does not increment `queuedEvents` — that counter is
+  writes the server has not got, and a board fetch carries nothing to sync. It
+  was counting them, so an app opened in a dead zone announced "1 update will
+  sync when you are back" about an update that never existed.
+- `refreshDuties()` **does not throw**. It is called from a button and from
+  pull-to-refresh, where an exception reaches nobody.
+- A failed refresh **does not take an existing board away**. The offline strip
+  says the board is old; one missed poll must not delete the day's work.
+
 ## Debug affordances
 
 Chips and menu items gated on `kDebugMode` let every state in the brief be
-reached without driving a bus: the empty duty board, already-running-elsewhere,
+reached without driving a bus: the empty duty board and the unreachable one,
+already-running-elsewhere,
 the school-gate geo-fence, the SOS drill and ops release, the escalation clock,
 and an offline simulation (crew menu, top right of the duty board). None of them
 ship in a release build.

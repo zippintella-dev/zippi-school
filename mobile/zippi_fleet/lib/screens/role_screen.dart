@@ -33,7 +33,17 @@ class _RoleScreenState extends State<RoleScreen> {
     // bearer token, so picking a card here is literally picking which token
     // every later request is sent with — which is why the driver/attendant
     // split cannot be spoofed by a client.
-    final options = store.roleLinks.isEmpty ? DemoData.assignments : store.roleLinks;
+    //
+    // ⚠ THE SECOND HALF OF THE SAME BUG. This also read
+    // `roleLinks.isEmpty ? DemoData.assignments : roleLinks`, so even with the
+    // store fixed, a live session with no links would still have drawn two
+    // invented cards for a school that is not this one. A picker with nothing
+    // to pick says so.
+    final options = store.roleLinks.isEmpty && !store.isLive
+        ? DemoData.assignments
+        : store.roleLinks;
+
+    if (options.isEmpty) return const _NoRoles();
 
     final selected = _selected ??
         options.firstWhere((a) => a.isToday, orElse: () => options.first);
@@ -206,6 +216,52 @@ class _AssignmentCard extends StatelessWidget {
                 style: Z.text(12, color: Z.faint, weight: FontWeight.w700)),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// A signed-in session whose role links did not survive, or never arrived.
+///
+/// ⚠ THE HONEST END OF THE OLD FABRICATION. The app previously filled this gap
+/// with the walkthrough fixtures, which is how a crew member came to be offered
+/// a driver card for Route 7 at Silver Oak School while holding an attendant's
+/// token for Phoenix Greens. A picker with nothing real to offer must say so
+/// and send them back to the one place that can mint a real link — sign-in.
+class _NoRoles extends StatelessWidget {
+  const _NoRoles();
+
+  @override
+  Widget build(BuildContext context) {
+    final store = FleetScope.of(context);
+
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('Sign in again', style: Z.head(24), textAlign: TextAlign.center),
+              const SizedBox(height: 10),
+              Text(
+                'This device no longer has a role for '
+                '${store.crewName ?? 'you'}. Signing in again will fetch it '
+                'from your transport office.',
+                textAlign: TextAlign.center,
+                style: Z.text(15, color: Z.muted).copyWith(height: 1.5),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: store.signOut,
+                  child: const Text('Sign in again'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

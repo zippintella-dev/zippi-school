@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:zippi_fleet/config.dart';
 import 'package:zippi_fleet/main.dart';
 import 'package:zippi_fleet/models/duty.dart';
@@ -21,9 +25,11 @@ import 'package:zippi_fleet/screens/sos_screen.dart';
 import 'package:zippi_fleet/screens/stop_list_screen.dart';
 import 'package:zippi_fleet/screens/sweep_screen.dart';
 import 'package:zippi_fleet/services/demo_data.dart';
+import 'package:zippi_fleet/services/fleet_api.dart';
 import 'package:zippi_fleet/services/fleet_scope.dart';
 import 'package:zippi_fleet/services/fleet_store.dart';
 import 'package:zippi_fleet/theme.dart';
+import 'package:zippi_fleet/widgets/offline_banner.dart';
 
 /// Every screen, pumped at phone size.
 ///
@@ -129,6 +135,66 @@ void main() {
       find.text('Tap a trip to open it. Trips cannot be started from here.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('3b · A board that could not be read never says "no trips"',
+      (tester) async {
+    final store = FleetStore(
+      api: FleetApi(
+        client: MockClient((_) async {
+          throw http.ClientException('connection reset');
+        }),
+        token: 'test-token',
+      ),
+    )..signIn(name: DemoData.crewName, phoneNumber: DemoData.crewPhone);
+
+    await store.chooseAssignment(DemoData.assignments.first);
+
+    await pumpScreen(tester, store, const DutyScreen());
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // ⚠ THIS IS THE BUG THIS TEST EXISTS FOR. The crew saw "No trips today ·
+    // this vehicle has nothing scheduled" for a fetch that never reached the
+    // server — a statement about the school's timetable, made on no
+    // information, pointing them at the transport office instead of at their
+    // signal. The sentence must never appear unless the server said it.
+    expect(find.text('No trips today'), findsNothing);
+    expect(find.textContaining('nothing scheduled'), findsNothing);
+
+    expect(find.text('Try again'), findsOneWidget);
+    expect(find.byType(OfflineBanner), findsOneWidget);
+  });
+
+  testWidgets('3c · An empty day says so, and its Refresh actually refetches',
+      (tester) async {
+    var reads = 0;
+
+    final store = FleetStore(
+      api: FleetApi(
+        client: MockClient((_) async {
+          reads++;
+          return http.Response(jsonEncode({'status': true, 'trips': const []}),
+              200,
+              headers: {'content-type': 'application/json'});
+        }),
+        token: 'test-token',
+      ),
+    )..signIn(name: DemoData.crewName, phoneNumber: DemoData.crewPhone);
+
+    await store.chooseAssignment(DemoData.assignments.first);
+    expect(reads, 1);
+
+    await pumpScreen(tester, store, const DutyScreen());
+
+    expect(find.text('No trips today'), findsOneWidget);
+
+    // ⚠ The button fetches. It used to be a bare `setState` that re-rendered
+    // its own "checked 10:27 AM" label off the current clock — a button whose
+    // only effect was to claim it had just checked.
+    await tester.tap(find.textContaining('Refresh · checked'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(reads, 2);
   });
 
   /* ---------------- attendant, morning ---------------- */

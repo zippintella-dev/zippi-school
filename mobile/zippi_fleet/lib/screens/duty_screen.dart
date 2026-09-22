@@ -29,15 +29,38 @@ class DutyScreen extends StatefulWidget {
 }
 
 class _DutyScreenState extends State<DutyScreen> {
-  /// Debug-only view switch so the empty state can be seen without waiting for
-  /// a day with no trips on it.
+  /// Debug-only view switch so the empty and unreachable states can be seen
+  /// without waiting for a day with no trips on it, or a dead zone.
   int _variant = 0;
+
+  /// So the first-load kick below fires once per mount, not on every notify.
+  bool _kicked = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    if (_kicked) return;
+    _kicked = true;
+
+    // ⚠ THE BOARD READS ITSELF WHEN IT IS SHOWN. The role picker's fetch can
+    // fail — a dead zone at the depot gate is the ordinary case — and until
+    // this existed, a crew member who then walked into signal sat on a board
+    // that had failed once and would never ask again: the only other refresh
+    // paths were a pull gesture and a button that did not actually fetch.
+    //
+    // `read`, not `of`: a dependency here would re-fire this on every notify.
+    final store = FleetScope.read(context);
+    if (!store.dutiesLoaded) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => store.refreshDuties());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final store = FleetScope.of(context);
     final assignment = store.assignment!;
-    final empty = _variant == 1;
 
     return Scaffold(
       body: SafeArea(
@@ -75,95 +98,156 @@ class _DutyScreenState extends State<DutyScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
                 child: StateChips(
-                  labels: const ["Today's board", 'No trips'],
+                  labels: const ["Today's board", 'No trips', "Can't load"],
                   selected: _variant,
                   onSelect: (i) => setState(() => _variant = i),
                 ),
               ),
-            Expanded(
-              child: empty || store.duties.isEmpty
-                  ? EmptyState(
-                      icon: Icons.directions_bus_rounded,
-                      title: 'No trips today',
-                      body: 'This vehicle has nothing scheduled. If that looks '
-                          'wrong, call your transport office.',
-                      action: SizedBox(
-                        height: Z.hChip,
-                        child: OutlinedButton(
-                          onPressed: () => setState(() {}),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(0, Z.hChip),
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 20),
-                          ),
-                          child: Text(
-                              'Refresh · checked ${fmtTime(DateTime.now())}',
-                              style: Z.text(14,
-                                  color: Z.teal, weight: FontWeight.w800)),
-                        ),
-                      ),
-                    )
-                  : RefreshIndicator(
-                      // The board is what a crew member re-checks when the
-                      // office says something changed.
-                      onRefresh: store.refreshDuties,
-                      color: Z.teal,
-                      child: Builder(builder: (context) {
-                        final board = _Board.from(store.duties);
+            Expanded(child: _body(store)),
+          ],
+        ),
+      ),
+    );
+  }
 
-                        return ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                          children: [
-                            // ⚠ ONE TRIP IS THE ANSWER TO "what now?".
-                            //
-                            // The board used to be a flat list of equal cards.
-                            // One bus runs 2–3 tiers per direction, so a full
-                            // day is up to six of them, and a crew member at a
-                            // kerb had to read all six and work out which one
-                            // they were standing in front of. The answer is
-                            // almost always exactly one trip — the running one,
-                            // or the next to depart — so that one is now large
-                            // and first, and everything else is folded below it.
-                            if (board.now != null) ...[
-                              _SectionLabel(
-                                board.now!.status == TripStatus.running
-                                    ? 'RIGHT NOW'
-                                    : 'NEXT',
-                              ),
-                              _TripCard(trip: board.now!),
-                              const SizedBox(height: 18),
-                            ],
+  /// ⚠ FOUR STATES, NOT TWO — and the two that were missing are the ones the
+  /// crew hit first on a bad morning.
+  ///
+  /// "No trips today · this vehicle has nothing scheduled" is a statement about
+  /// the school's timetable, and it may only be made when the server has
+  /// actually made it. An empty [FleetStore.duties] on its own does not mean
+  /// that: it is also what a board looks like before it has ever loaded, and
+  /// what it looks like after a fetch died in a dead zone. Showing the
+  /// timetable sentence for a failed fetch tells a crew member their bus is
+  /// free when it has a run on it, and points them at the transport office
+  /// instead of at the signal bar.
+  Widget _body(FleetStore store) {
+    final nothing = store.duties.isEmpty;
 
-                            if (board.later.isNotEmpty) ...[
-                              _SectionLabel('LATER TODAY · ${board.later.length}'),
-                              for (final trip in board.later) ...[
-                                _TripCard(trip: trip),
-                                const SizedBox(height: 12),
-                              ],
-                              const SizedBox(height: 6),
-                            ],
+    // Debug-only overrides so both failure screens can be seen on demand.
+    final unreachable =
+        _variant == 2 || (nothing && store.dutiesError != null);
+    final empty = _variant == 1 || (nothing && store.dutiesLoaded);
+    final loading = nothing && !store.dutiesLoaded;
 
-                            if (board.finished.isNotEmpty) ...[
-                              _SectionLabel('EARLIER TODAY · ${board.finished.length}'),
-                              for (final trip in board.finished) ...[
-                                _TripCard(trip: trip),
-                                const SizedBox(height: 10),
-                              ],
-                            ],
+    // ⚠ A BOARD ALREADY IN HAND IS NEVER REPLACED BY AN ERROR. If a refresh
+    // fails with trips on screen, the trips stay and the offline strip at the
+    // top says why — taking the day's work away because one poll missed is
+    // worse than showing a board that is a few minutes old.
+    if (unreachable) {
+      return ErrorState(
+        store.dutiesError ??
+            'Could not reach the server, so today\'s trips have not loaded. '
+                'This is not "no trips" — it is "not known yet".',
+        onRetry: store.refreshDuties,
+      );
+    }
 
-                            const SizedBox(height: 4),
-                            Text(
-                              'Tap a trip to open it. Trips cannot be started '
-                              'from here.',
-                              textAlign: TextAlign.center,
-                              style: Z.text(13, color: Z.faint),
-                            ),
-                          ],
-                        );
-                      }),
-                    ),
+    if (loading) return const _Checking();
+
+    if (empty) {
+      return EmptyState(
+        icon: Icons.directions_bus_rounded,
+        title: 'No trips today',
+        body: 'This vehicle has nothing scheduled. If that looks wrong, call '
+            'your transport office.',
+        action: SizedBox(
+          height: Z.hChip,
+          child: OutlinedButton(
+            // ⚠ IT FETCHES. This was a bare `setState`, which re-rendered the
+            // label with the current clock and did nothing else — a button
+            // whose only effect was to claim it had just checked. The time
+            // shown is now the time of the last answer from the server.
+            onPressed: store.busy ? null : store.refreshDuties,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(0, Z.hChip),
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+            ),
+            child: Text(
+                store.busy
+                    ? 'Checking…'
+                    : 'Refresh · checked ${fmtTime(store.dutiesCheckedAt)}',
+                style: Z.text(14, color: Z.teal, weight: FontWeight.w800)),
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      // The board is what a crew member re-checks when the office says
+      // something changed.
+      onRefresh: store.refreshDuties,
+      color: Z.teal,
+      child: Builder(builder: (context) {
+        final board = _Board.from(store.duties);
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            // ⚠ ONE TRIP IS THE ANSWER TO "what now?".
+            //
+            // The board used to be a flat list of equal cards. One bus runs
+            // 2–3 tiers per direction, so a full day is up to six of them, and
+            // a crew member at a kerb had to read all six and work out which
+            // one they were standing in front of. The answer is almost always
+            // exactly one trip — the running one, or the next to depart — so
+            // that one is now large and first, and the rest fold below it.
+            if (board.now != null) ...[
+              _SectionLabel(
+                board.now!.status == TripStatus.running ? 'RIGHT NOW' : 'NEXT',
+              ),
+              _TripCard(trip: board.now!),
+              const SizedBox(height: 18),
+            ],
+
+            if (board.later.isNotEmpty) ...[
+              _SectionLabel('LATER TODAY · ${board.later.length}'),
+              for (final trip in board.later) ...[
+                _TripCard(trip: trip),
+                const SizedBox(height: 12),
+              ],
+              const SizedBox(height: 6),
+            ],
+
+            if (board.finished.isNotEmpty) ...[
+              _SectionLabel('EARLIER TODAY · ${board.finished.length}'),
+              for (final trip in board.finished) ...[
+                _TripCard(trip: trip),
+                const SizedBox(height: 10),
+              ],
+            ],
+
+            const SizedBox(height: 4),
+            Text(
+              'Tap a trip to open it. Trips cannot be started from here.',
+              textAlign: TextAlign.center,
+              style: Z.text(13, color: Z.faint),
             ),
           ],
+        );
+      }),
+    );
+  }
+}
+
+/// The board before its first answer.
+///
+/// ⚠ WORDS, NOT A SPINNER. "Never a bare spinner that hangs" — a crew member
+/// looking at an indeterminate circle cannot tell a slow read from a dead one,
+/// and this screen is read at 6:40 AM by somebody deciding whether to wait or
+/// to ring the depot.
+class _Checking extends StatelessWidget {
+  const _Checking();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Text(
+          'Checking today\'s board…',
+          textAlign: TextAlign.center,
+          style: Z.text(15, color: Z.muted),
         ),
       ),
     );

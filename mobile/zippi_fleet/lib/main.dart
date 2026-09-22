@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'config.dart';
+import 'models/duty.dart';
 import 'screens/duty_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/role_screen.dart';
@@ -89,11 +90,19 @@ class _ZippiFleetAppState extends State<ZippiFleetApp> {
     String? phone;
     String? name;
     String? token;
+    List<CrewAssignment> links = const [];
 
     try {
       phone = await _auth.phone().timeout(_restoreBudget);
       name = await _auth.crewName().timeout(_restoreBudget);
       token = await _auth.token().timeout(_restoreBudget);
+
+      // ⚠ RESTORE THE ROLE LINKS TOO. Without them the app knew a name and a
+      // token and nothing about what that token was FOR — and then filled the
+      // gap from the walkthrough fixtures, offering a real crew member a driver
+      // card for a route at a school that does not exist. See
+      // FleetStore.signIn.
+      links = await _auth.links().timeout(_restoreBudget);
     } on Exception catch (e) {
       debugPrint('Fleet: could not read the saved session — $e');
     }
@@ -110,6 +119,7 @@ class _ZippiFleetAppState extends State<ZippiFleetApp> {
         name: name ?? 'Crew',
         phoneNumber: phone,
         token: token,
+        links: links,
       );
     }
 

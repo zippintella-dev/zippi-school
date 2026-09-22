@@ -439,6 +439,65 @@ void main() {
   });
 
   /* ================================================================= */
+  group('Role links', () {
+    test('a live session with no links is EMPTY, never the demo fixtures',
+        () async {
+      final store = storeWith(MockClient((_) async => ok({'status': true})));
+
+      // Exactly what the restore path does: a name and a token off the
+      // keychain, and no links.
+      store.signIn(name: 'Sunitha Reddy', phoneNumber: '+919848012203',
+          token: 'restored-token');
+
+      // ⚠ THE BUG THIS PINS. This used to hand back DemoData.assignments —
+      // Route 12 and Route 7 at "Silver Oak School", neither of which exists in
+      // any real database. A crew member relaunching the app was offered a
+      // DRIVER card while holding an ATTENDANT's token, and picking it sets
+      // `role`, which decides whether this device renders any child-marking
+      // control at all.
+      expect(store.roleLinks, isEmpty);
+      expect(store.roleLinks.map((l) => l.schoolName), isNot(contains('Silver Oak School')));
+    });
+
+    test('a restored link keeps its role, school and token', () async {
+      final store = storeWith(MockClient((_) async => ok({'status': true})));
+
+      final saved = CrewAssignment.fromJson({
+        'staff_id': 9,
+        'role': 'attendant',
+        'school': {'name': 'Phoenix Greens International School'},
+        'token': 'attendant-token',
+      });
+
+      // Round-trips through the keychain's own encoding.
+      final reread = CrewAssignment.fromJson(saved.toJson());
+
+      store.signIn(name: 'Sunitha Reddy', phoneNumber: '+919848012203',
+          links: [reread]);
+
+      expect(store.roleLinks, hasLength(1));
+      expect(store.roleLinks.single.role, FleetRole.attendant);
+      expect(store.roleLinks.single.staffId, 9);
+      expect(store.roleLinks.single.token, 'attendant-token');
+      expect(store.roleLinks.single.schoolName,
+          'Phoenix Greens International School');
+
+      // ⚠ A real role link carries NO route or bus — those belong to today's
+      // trips. A card showing "Route 7 · North loop" is a fabricated card.
+      expect(store.roleLinks.single.routeCode, isEmpty);
+      expect(store.roleLinks.single.busRegistration, isEmpty);
+    });
+
+    test('demo mode still gets the fixtures — they are its only data', () {
+      final store = FleetStore();     // no api == demo mode
+
+      store.signIn(name: 'Ravi Kumar', phoneNumber: '9999999999');
+
+      expect(store.roleLinks, isNotEmpty);
+    });
+  });
+
+  /* ================================================================= */
   group('Offline', () {
     test('a dead zone is reported as a dead zone, not as a refusal', () async {
       final store = storeWith(MockClient((request) async {
@@ -458,6 +517,71 @@ void main() {
       // nothing did is the one reassurance this app must never give.
       expect(store.offline, isTrue);
       expect(store.queuedEvents, 1);
+    });
+
+    test('a board that could not be read is NOT a board with no trips on it',
+        () async {
+      final store = storeWith(MockClient((_) async {
+        throw http.ClientException('connection reset');
+      }));
+
+      // ⚠ It must not throw. This runs from a button press and from
+      // pull-to-refresh, where a thrown exception reaches nobody — which is
+      // how the crew ended up reading an empty board with no explanation.
+      await store.refreshDuties();
+
+      expect(store.duties, isEmpty);
+      expect(store.offline, isTrue);
+
+      // ⚠ THE WHOLE POINT. Empty and unread are different states, and only one
+      // of them may be shown as "this vehicle has nothing scheduled". A crew
+      // member told that about a bus that has a run on it does not board 22
+      // children.
+      expect(store.dutiesLoaded, isFalse);
+      expect(store.dutiesError, isNotNull);
+
+      // A failed READ has nothing to sync. Counting it told the crew "1 update
+      // will sync when you are back" about an update that never existed.
+      expect(store.queuedEvents, 0);
+    });
+
+    test('an answered board is loaded even when the school has no trips',
+        () async {
+      final store = storeWith(
+          MockClient((_) async => ok({'status': true, 'trips': const []})));
+
+      await store.refreshDuties();
+
+      expect(store.duties, isEmpty);
+      expect(store.dutiesLoaded, isTrue,
+          reason: 'the server answered — "no trips" is now a fact, not a guess');
+      expect(store.dutiesError, isNull);
+      expect(store.offline, isFalse);
+    });
+
+    test('a failed refresh does not take the board away', () async {
+      var fail = false;
+
+      final store = storeWith(MockClient((_) async {
+        if (fail) throw http.ClientException('connection reset');
+        return ok({
+          'status': true,
+          'trips': [tripPayload()],
+        });
+      }));
+
+      await store.refreshDuties();
+      expect(store.duties, hasLength(1));
+
+      fail = true;
+      await store.refreshDuties();
+
+      // ⚠ The day's work stays on screen; the offline strip says why it is
+      // old. Taking the board away because one poll missed is worse than
+      // showing one that is a few minutes behind.
+      expect(store.duties, hasLength(1));
+      expect(store.dutiesError, isNotNull);
+      expect(store.offline, isTrue);
     });
   });
 }

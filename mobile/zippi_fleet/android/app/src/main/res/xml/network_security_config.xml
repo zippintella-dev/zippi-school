@@ -4,10 +4,13 @@
 
   ⚠ This app carries a child's live location and today's handover code. Plain
   HTTP on a shared school Wi-Fi is trivially readable by anyone on the network,
-  so cleartext is denied outright here. The debug manifest overrides this to
-  allow the LAN ranges a developer's Laravel server runs on — see
-  src/debug/network_security_config.xml. That override never ships in a release
-  build, because the release build uses THIS file.
+  so cleartext is denied outright here.
+
+  Debug builds overlay this with src/debug/res/xml/network_security_config.xml —
+  same resource name in the `debug` source set, which is how Gradle lets one
+  variant replace another's resource. That override permits cleartext so the app
+  can reach `php artisan serve` over a LAN address, and it never ships: a
+  release build has no debug source set, so it uses THIS file.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">

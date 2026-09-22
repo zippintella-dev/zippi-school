@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/duty.dart';
@@ -21,6 +24,7 @@ class AuthStore {
   static const _kRole = 'zippi_fleet_role';
   static const _kToken = 'zippi_fleet_token';
   static const _kStaffId = 'zippi_fleet_staff_id';
+  static const _kLinks = 'zippi_fleet_links';
 
   final FlutterSecureStorage _storage;
 
@@ -91,6 +95,43 @@ class AuthStore {
     return raw == null ? null : int.tryParse(raw);
   }
 
+  /// Every role link this phone signed in for, each with its own token.
+  ///
+  /// ⚠ WITHOUT THESE, A RESTORED SESSION KNOWS NOTHING ABOUT ITSELF. The app
+  /// used to restore a name and a token and no links at all, and then filled
+  /// the gap from the walkthrough fixtures — so a crew member relaunching the
+  /// app was offered a driver card for a route at a school that does not
+  /// exist, holding an attendant's token. Store them, and there is nothing to
+  /// invent.
+  Future<void> saveLinks(List<CrewAssignment> links) async {
+    if (links.isEmpty) {
+      await _storage.delete(key: _kLinks);
+      return;
+    }
+
+    await _storage.write(
+      key: _kLinks,
+      value: jsonEncode(links.map((l) => l.toJson()).toList()),
+    );
+  }
+
+  /// ⚠ Returns empty on ANY failure — a corrupted keystore after an OS update
+  /// is the usual way, and a crew member signing in again costs thirty seconds.
+  /// What must never happen is a fabricated link standing in for a real one.
+  Future<List<CrewAssignment>> links() async {
+    try {
+      final raw = await _storage.read(key: _kLinks);
+      if (raw == null || raw.isEmpty) return const [];
+
+      return (jsonDecode(raw) as List)
+          .map((e) => CrewAssignment.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('Fleet: could not read the saved role links — $e');
+      return const [];
+    }
+  }
+
   Future<String?> crewName() => _storage.read(key: _kName);
 
   Future<String?> lastRole() => _storage.read(key: _kRole);
@@ -104,5 +145,6 @@ class AuthStore {
     await _storage.delete(key: _kRole);
     await _storage.delete(key: _kToken);
     await _storage.delete(key: _kStaffId);
+    await _storage.delete(key: _kLinks);
   }
 }
