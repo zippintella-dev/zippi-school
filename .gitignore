@@ -35,3 +35,6 @@ Thumbs.db
 # the APK and CI needs them to build. This one never does.
 /storage/app/firebase/
 *-service-account*.json
+
+# Deploy SSH key — the private half lets anyone push a release to the server.
+/storage/app/deploy/
