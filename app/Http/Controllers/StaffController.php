@@ -113,7 +113,34 @@ class StaffController extends Controller
         return back()->with('ok', 'Staff member removed.');
     }
 
+    /**
+     * ⚠ A LICENCE BELONGS TO A DRIVER, AND ONLY TO A DRIVER.
+     *
+     * The three driver fields are hidden for an attendant in both forms, but a
+     * hidden input still posts, and `role` is editable — so a driver moved to
+     * attendant would otherwise keep a licence number, an expiry and a heavy
+     * vehicle history on their record forever.
+     *
+     * That is not merely untidy. `complianceBlockers()` reads the licence only
+     * for drivers, so a stale expired licence sits there contradicting the
+     * "clean" badge on the same screen, and the first person to notice has to
+     * work out which of the two the system believes. Strip them here, where
+     * every write to this table already passes.
+     */
     private function rules(Request $request, ?SchoolStaff $member, int $schoolId): array
+    {
+        $data = $this->validated($request, $member, $schoolId);
+
+        if ($data['role'] === 'attendant') {
+            $data['licence_no'] = null;
+            $data['licence_expiry'] = null;
+            $data['heavy_vehicle_years'] = null;
+        }
+
+        return $data;
+    }
+
+    private function validated(Request $request, ?SchoolStaff $member, int $schoolId): array
     {
         return $request->validate([
             'role'  => ['required', Rule::in(['driver', 'attendant'])],

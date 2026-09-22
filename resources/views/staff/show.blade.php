@@ -157,18 +157,22 @@
             <input class="input" name="gender"
                    value="{{ old('gender', $member->gender) }}"></div>
 
-          <h3 style="margin:22px 0 10px;font-size:13px;letter-spacing:.4px"
-              class="muted">LICENCE</h3>
+          {{-- ⚠ DRIVER ONLY. An attendant does not drive, so these are not
+               facts about them. Switching the role above hides them; the server
+               nulls them regardless, because a hidden input still posts and a
+               stale licence on an attendant contradicts the compliance badge
+               sitting on the same screen. --}}
+          <h3 class="muted driver-only" style="margin:22px 0 10px;font-size:13px;letter-spacing:.4px">LICENCE</h3>
 
-          <div class="field"><label>Licence number</label>
+          <div class="field driver-only"><label>Licence number</label>
             <input class="input" name="licence_no"
                    value="{{ old('licence_no', $member->licence_no) }}"></div>
 
-          <div class="field"><label>Licence expiry</label>
+          <div class="field driver-only"><label>Licence expiry</label>
             <input class="input" type="date" name="licence_expiry"
                    value="{{ old('licence_expiry', $member->licence_expiry) }}"></div>
 
-          <div class="field"><label>Heavy vehicle experience (years)</label>
+          <div class="field driver-only"><label>Heavy vehicle experience (years)</label>
             <input class="input" type="number" min="0" max="60" name="heavy_vehicle_years"
                    value="{{ old('heavy_vehicle_years', $member->heavy_vehicle_years) }}"></div>
 
@@ -277,4 +281,24 @@
   </div>
 
 </div>
+
+{{-- ⚠ Driver-only fields, hidden the moment "Attendant" is chosen.
+     Progressive: with JS off every field simply stays visible and the server
+     still strips them, so the record is correct either way. It runs on load as
+     well as on change, because a validation bounce re-renders the form with
+     old('role') already set to attendant. --}}
+<script>
+  document.querySelectorAll('form select[name="role"]').forEach(function (sel) {
+    function sync() {
+      var driver = sel.value === 'driver';
+      sel.form.querySelectorAll('.driver-only').forEach(function (f) {
+        f.hidden = !driver;
+        f.querySelectorAll('input, select').forEach(function (i) { i.disabled = !driver; });
+      });
+    }
+    sel.addEventListener('change', sync);
+    sync();
+  });
+</script>
+
 @endsection

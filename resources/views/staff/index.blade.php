@@ -44,11 +44,16 @@
             <option value="male" @selected(old('gender')==='male')>Male</option>
           </select>
           <div class="help">Some states mandate a female attendant.</div></div>
-        <div class="field"><label>Licence number</label>
+        {{-- ⚠ DRIVER ONLY. An attendant does not drive the bus, so a licence
+             number, its expiry and a heavy-vehicle history are not facts about
+             them — asking for them invites somebody to type the driver's.
+             Hidden by the role toggle below; the SERVER strips them regardless,
+             because a hidden input still posts. --}}
+        <div class="field driver-only"><label>Licence number</label>
           <input class="input" name="licence_no" value="{{ old('licence_no') }}"></div>
-        <div class="field"><label>Licence expiry</label>
+        <div class="field driver-only"><label>Licence expiry</label>
           <input class="input" type="date" name="licence_expiry" value="{{ old('licence_expiry') }}"></div>
-        <div class="field"><label>Heavy-vehicle years</label>
+        <div class="field driver-only"><label>Heavy-vehicle years</label>
           <input class="input" type="number" name="heavy_vehicle_years" value="{{ old('heavy_vehicle_years') }}"></div>
         <div class="field"><label>Police verification</label>
           <select class="input" name="police_verification_status" required>
@@ -125,4 +130,24 @@
     </table>
   </div>
 </div>
+
+{{-- ⚠ Driver-only fields, hidden the moment "Attendant" is chosen.
+     Progressive: with JS off every field simply stays visible and the server
+     still strips them, so the record is correct either way. It runs on load as
+     well as on change, because a validation bounce re-renders the form with
+     old('role') already set to attendant. --}}
+<script>
+  document.querySelectorAll('form select[name="role"]').forEach(function (sel) {
+    function sync() {
+      var driver = sel.value === 'driver';
+      sel.form.querySelectorAll('.driver-only').forEach(function (f) {
+        f.hidden = !driver;
+        f.querySelectorAll('input, select').forEach(function (i) { i.disabled = !driver; });
+      });
+    }
+    sel.addEventListener('change', sync);
+    sync();
+  });
+</script>
+
 @endsection

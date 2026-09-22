@@ -95,6 +95,89 @@ class StaffRecordTest extends TestCase
         $this->assertEmpty($fresh->complianceBlockers());
     }
 
+    /**
+     * ⚠ AN ATTENDANT HAS NO LICENCE, AND THE SERVER IS WHAT ENFORCES THAT.
+     *
+     * Both forms hide the three driver fields once "Attendant" is chosen, but a
+     * hidden input still posts and `role` is editable — so a driver moved to
+     * attendant would keep a licence number, an expiry and a heavy-vehicle
+     * history on their record. `complianceBlockers()` reads the licence only
+     * for drivers, so a stale expired one would sit there contradicting the
+     * "clean" badge on the same screen.
+     */
+    public function test_an_attendant_cannot_carry_driver_credentials(): void
+    {
+        $this->actingAs($this->admin)
+            ->post('/staff', [
+                'role' => 'attendant',
+                'name' => 'Lakshmi Test',
+                'phone' => '9000000123',
+                'police_verification_status' => 'verified',
+                // Posted anyway, as a hidden field or a crafted request would.
+                'licence_no' => 'TS0920200008812',
+                'licence_expiry' => '2030-01-01',
+                'heavy_vehicle_years' => 7,
+            ])
+            ->assertRedirect();
+
+        $made = SchoolStaff::where('phone', '9000000123')->firstOrFail();
+
+        $this->assertSame('attendant', $made->role);
+        $this->assertNull($made->licence_no);
+        $this->assertNull($made->licence_expiry);
+        $this->assertNull($made->heavy_vehicle_years);
+    }
+
+    /** Demoting a driver strips the credentials that are no longer theirs. */
+    public function test_moving_a_driver_to_attendant_clears_the_licence(): void
+    {
+        $driver = SchoolStaff::where('role', 'driver')->firstOrFail();
+
+        $this->assertNotNull($driver->licence_no);
+
+        $this->actingAs($this->admin)
+            ->put("/staff/{$driver->id}", [
+                'role' => 'attendant',
+                'name' => $driver->name,
+                'phone' => $driver->phone,
+                'police_verification_status' => $driver->police_verification_status,
+                'licence_no' => $driver->licence_no,
+                'licence_expiry' => '2030-01-01',
+                'heavy_vehicle_years' => 9,
+            ])
+            ->assertRedirect();
+
+        $fresh = $driver->fresh();
+
+        $this->assertSame('attendant', $fresh->role);
+        $this->assertNull($fresh->licence_no);
+        $this->assertNull($fresh->licence_expiry);
+        $this->assertNull($fresh->heavy_vehicle_years);
+    }
+
+    /** A driver keeps theirs — the strip must not fire for the role that needs them. */
+    public function test_a_driver_keeps_their_licence(): void
+    {
+        $driver = SchoolStaff::where('role', 'driver')->firstOrFail();
+
+        $this->actingAs($this->admin)
+            ->put("/staff/{$driver->id}", [
+                'role' => 'driver',
+                'name' => $driver->name,
+                'phone' => $driver->phone,
+                'police_verification_status' => 'verified',
+                'licence_no' => 'TS0920200009999',
+                'licence_expiry' => '2030-01-01',
+                'heavy_vehicle_years' => 11,
+            ])
+            ->assertRedirect();
+
+        $fresh = $driver->fresh();
+
+        $this->assertSame('TS0920200009999', $fresh->licence_no);
+        $this->assertSame(11, (int) $fresh->heavy_vehicle_years);
+    }
+
     public function test_a_school_user_cannot_edit_another_schools_crew(): void
     {
         $other = School::create([
