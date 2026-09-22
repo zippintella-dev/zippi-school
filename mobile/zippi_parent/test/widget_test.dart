@@ -3,8 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zippi_parent/models/family_card.dart';
 import 'package:zippi_parent/models/journey_day.dart';
 import 'package:zippi_parent/screens/activity_screen.dart';
+import 'package:zippi_parent/screens/home_screen.dart';
 import 'package:zippi_parent/screens/select_child_screen.dart';
 import 'package:zippi_parent/screens/verify_screen.dart';
+import 'package:zippi_parent/services/api_client.dart';
+import 'package:zippi_parent/services/auth_store.dart';
 import 'package:zippi_parent/theme.dart';
 import 'package:zippi_parent/widgets/common.dart';
 
@@ -298,6 +301,67 @@ void main() {
       await tester.pump();
 
       expect(picked?.childId, 2);
+    });
+
+    /// PART A7 (extended) — the morning boarding code has to be REACHABLE.
+    ///
+    /// ⚠ It was not. `PickupScreen` rendered it and `FamilyCard` carried it,
+    /// but the home screen only ever offered a way in for the afternoon
+    /// handover code, and that screen is not a tab. The code arrived in every
+    /// payload and no parent could get to it.
+    FamilyCard codeCard({required bool morning}) => FamilyCard.fromJson({
+          'child_id': 1,
+          'name': 'Aarav Mehta',
+          'grade': '3',
+          'bell_tier': 'Primary',
+          'school': 'Phoenix Greens',
+          'school_phone': null,
+          'service_date': '2026-08-21',
+          'has_active_trip': true,
+          'show_live_map': false,
+          'status': 'pending',
+          'status_label': 'Bus is on the way',
+          'absent': false,
+          'absent_directions': [],
+          'show_handover_code': !morning,
+          'show_boarding_code': morning,
+          'trip': null,
+          'stop': null,
+          'timeline': [],
+        });
+
+    Widget home(FamilyCard c) => MaterialApp(
+          theme: Z.theme(),
+          home: Scaffold(
+            body: HomeScreen(
+              // Never called — the test taps nothing that fetches. The buttons
+              // are what is under test, not what they lead to.
+              api: ApiClient(AuthStore()),
+              child: c,
+              siblingCount: 1,
+              onRefresh: () async {},
+              onSwitchChild: () {},
+            ),
+          ),
+        );
+
+    testWidgets('the morning board offers the BOARDING code', (tester) async {
+      await tester.pumpWidget(home(codeCard(morning: true)));
+
+      expect(find.text('Show boarding code'), findsOneWidget);
+
+      // ⚠ Never both. The server sets exactly one flag, from the trip's
+      // direction — two code buttons on one screen is a parent reading the
+      // wrong number out at a kerb.
+      expect(find.text('Show handover code'), findsNothing);
+    });
+
+    testWidgets('the afternoon board still offers the HANDOVER code',
+        (tester) async {
+      await tester.pumpWidget(home(codeCard(morning: false)));
+
+      expect(find.text('Show handover code'), findsOneWidget);
+      expect(find.text('Show boarding code'), findsNothing);
     });
 
     testWidgets('the picker marks the current choice', (tester) async {

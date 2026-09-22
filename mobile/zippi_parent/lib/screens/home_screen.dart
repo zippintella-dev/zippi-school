@@ -230,8 +230,30 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 10),
         ],
-        if (child.showHandoverCode) ...[
+        // ⚠ EXACTLY ONE OF THESE CAN BE TRUE. The server decides from the
+        // trip's direction, and the two flags are mutually exclusive — so this
+        // is one control that changes what it is, not two that could both show.
+        //
+        // ⚠ THE MORNING BRANCH WAS MISSING. `PickupScreen` has rendered the
+        // boarding code since it was added, and the model has carried it — but
+        // nothing on this screen led there, and that screen is not a tab. So
+        // the morning code existed on the server, arrived in the payload, and
+        // was unreachable: a parent stood at a 07:15 kerb being asked for a
+        // number their app would not show them.
+        if (child.showBoardingCode) ...[
           FilledButton(
+            onPressed: () =>
+                push(PickupScreen(api: api, childId: child.childId)),
+            child: const Text('Show boarding code'),
+          ),
+          const SizedBox(height: 10),
+        ] else if (child.showHandoverCode) ...[
+          FilledButton(
+            // Coral for the afternoon only. That code is the one moment custody
+            // passes to an individual at a kerb, and it is the screen a parent
+            // must find while a bus is waiting. The morning code is the calmer
+            // of the two — it cannot refuse a boarding — so it does not borrow
+            // the same urgency.
             style: FilledButton.styleFrom(
               backgroundColor: Z.coral,
               foregroundColor: Z.onCoral,

@@ -58,8 +58,16 @@ class _PickupScreenState extends State<PickupScreen> with WidgetsBindingObserver
       final card = await widget.api.child(widget.childId);
       if (!mounted) return;
 
-      // The handover happened (or the day moved on). Leave.
-      if (!card.showHandoverCode && _card != null) {
+      // The code has done its job (or the day moved on). Leave rather than
+      // leave a dead code on display that an attendant might still be shown.
+      //
+      // ⚠ BOTH CODES, NOT JUST THE AFTERNOON ONE. This tested
+      // `!card.showHandoverCode` alone, which is false all morning — so this
+      // screen popped itself on its first poll, about ten seconds after a
+      // parent opened it to read the boarding code out at the kerb. The screen
+      // serves whichever code the server says is live; it closes when neither
+      // is.
+      if (!card.showHandoverCode && !card.showBoardingCode && _card != null) {
         Navigator.of(context).pop();
         return;
       }
@@ -83,7 +91,11 @@ class _PickupScreenState extends State<PickupScreen> with WidgetsBindingObserver
         child: Column(
           children: [
             ScreenHeader(
-              'Afternoon pickup',
+              // ⚠ The title names the code in play. "Afternoon pickup" over a
+              // morning boarding code is the sentence that sends a parent
+              // looking for the wrong number at a 07:15 kerb — the same trap
+              // the placeholder text below already avoids.
+              (c?.showBoardingCode ?? false) ? 'Morning boarding' : 'Afternoon pickup',
               subtitle: c == null
                   ? null
                   : [
