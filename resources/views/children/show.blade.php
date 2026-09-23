@@ -68,7 +68,18 @@
             <div class="field"><label>Afternoon stop</label>
               <select class="input" name="afternoon_stop_id" id="pmStop"></select></div>
           </div>
-          <button class="btn sm" type="submit">Save assignment</button>
+          {{-- ⚠ A route with no stops is a NORMAL onboarding state — routes get
+               created before their kerbs are surveyed — and the form used to
+               show an empty dropdown for it. The browser then said "Please
+               select an item in the list", which reads as a fault in the page
+               rather than "this route has nowhere to stand yet". Say which. --}}
+          <div class="note warn" id="noStops" style="display:none;margin:10px 0">
+            <b><span id="noStopsCode"></span> has no stops yet.</b>
+            Add one on <a href="{{ route('routes.index') }}">Routes &amp; stops</a>,
+            then come back — a child is assigned to a published stop, never to a
+            home address.
+          </div>
+          <button class="btn sm" type="submit" id="saveAssign">Save assignment</button>
         </form>
       </div>
     </div>
@@ -369,6 +380,10 @@
   var preAm = @json($child->assignmentFor('Morning')?->stop_id);
   var prePm = @json($child->assignmentFor('Afternoon')?->stop_id);
 
+  var noStops = document.getElementById('noStops');
+  var noStopsCode = document.getElementById('noStopsCode');
+  var saveAssign = document.getElementById('saveAssign');
+
   function fill() {
     var list = STOPS[routeSel.value] || [];
     amStop.innerHTML = '<option value="">— select a stop —</option>';
@@ -377,6 +392,21 @@
       amStop.add(new Option(s.label, s.id, false, String(s.id) === String(preAm)));
       pmStop.add(new Option(s.label, s.id, false, String(s.id) === String(prePm)));
     });
+
+    // ⚠ Explain the empty case instead of letting the browser call it an
+    // error. Blocking the save is the honest half: there is no stop to pick,
+    // so the form cannot be completed, and a disabled button says that before
+    // a click does.
+    var chosen = routeSel.value !== '';
+    var empty = chosen && list.length === 0;
+
+    noStops.style.display = empty ? '' : 'none';
+    if (empty) {
+      noStopsCode.textContent =
+        routeSel.options[routeSel.selectedIndex].textContent.trim();
+    }
+    saveAssign.disabled = empty;
+    amStop.required = ! empty;
   }
   routeSel.addEventListener('change', function () { preAm = prePm = null; fill(); });
   fill();

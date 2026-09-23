@@ -212,6 +212,46 @@ class WritePathTest extends TestCase
         $this->assertSame($stop->id, $rows->firstWhere('direction', 'Afternoon')->stop_id);
     }
 
+    /**
+     * ⚠ A ROUTE WITH NO STOPS MUST SAY SO.
+     *
+     * The stop picker is filled from whichever route is selected beside it. A
+     * route that has none yet — an ordinary onboarding state, since routes are
+     * created before their kerbs are surveyed — produced an empty dropdown and
+     * then the browser's own "Please select an item in the list", which reads
+     * as a fault in the page rather than "this route has nowhere to stand".
+     */
+    public function test_the_stop_picker_explains_a_route_with_no_stops(): void
+    {
+        $school = School::first();
+
+        $empty = Route::create([
+            'school_id' => $school->id,
+            'code' => 'RT-99',
+            'name' => 'Surveyed but not walked',
+            'status' => 'active',
+        ]);
+
+        $child = Child::where('school_id', $school->id)->firstOrFail();
+
+        $html = $this->actingAs($this->admin)
+            ->get("/children/{$child->id}")->assertOk()->getContent();
+
+        // The route is offered...
+        $this->assertStringContainsString('RT-99', $html);
+        // ...and so is the sentence for when it has nowhere to stop.
+        $this->assertStringContainsString('has no stops yet', $html);
+        $this->assertStringContainsString(route('routes.index'), $html);
+
+        // A route that HAS stops still fills the picker, so the fix did not
+        // break the ordinary case: the labels come from the eager-loaded
+        // relation, not a lazy load per route.
+        $stop = Route::where('school_id', $school->id)
+            ->whereHas('stops')->firstOrFail()->stops()->firstOrFail();
+
+        $this->assertStringContainsString($stop->name, $html);
+    }
+
     /** Editing a stop moves the pin the whole trip is solved against. */
     public function test_a_stop_can_be_edited_from_the_route_page(): void
     {
