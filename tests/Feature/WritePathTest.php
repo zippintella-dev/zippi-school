@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Child;
+use App\Models\ChildStopAssignment;
 use App\Models\Route;
 use App\Models\RouteStop;
 use App\Models\School;
@@ -145,6 +146,70 @@ class WritePathTest extends TestCase
         // …and both say they are editors rather than looking like labels.
         $this->assertStringContainsString('Edit route', $html);
         $this->assertStringContainsString('>edit</span>', $html);
+    }
+
+    /**
+     * ⚠ THE ROUTE PAGE MUST ANSWER "WHO IS ON THIS ROUTE?".
+     *
+     * It showed a rider COUNT per stop and nothing else — no names, and no way
+     * to move anybody. Assignment existed only on the child's own record, which
+     * is the wrong way round for the question a transport office actually asks:
+     * when a route fills up, a bus is swapped, or a kerb becomes unsafe, they
+     * start from the route, not from 40 individual pupils.
+     */
+    public function test_the_route_page_lists_its_riders_and_can_assign_one(): void
+    {
+        $school = School::first();
+
+        $route = Route::where('school_id', $school->id)
+            ->whereHas('stops')->firstOrFail();
+
+        $rider = ChildStopAssignment::with('child')
+            ->where('route_id', $route->id)
+            ->where('direction', 'Morning')
+            ->firstOrFail();
+
+        $html = $this->actingAs($this->admin)
+            ->get("/routes/{$route->id}")->assertOk()->getContent();
+
+        // The names, not just the number.
+        $this->assertStringContainsString('Students on this route', $html);
+        $this->assertStringContainsString($rider->child->name, $html);
+        $this->assertStringContainsString(route('children.show', $rider->child), $html);
+
+        // And a way to put somebody on it.
+        $this->assertStringContainsString('Assign a student to this route', $html);
+    }
+
+    /** Assigning from the route page writes both legs, like the child page does. */
+    public function test_a_student_can_be_moved_onto_a_route_from_its_page(): void
+    {
+        $school = School::first();
+
+        $route = Route::where('school_id', $school->id)->whereHas('stops')->firstOrFail();
+        $stop  = $route->stops()->firstOrFail();
+
+        // Somebody currently riding a DIFFERENT route — moving them is the
+        // operation, and the endpoint must replace rather than duplicate.
+        $elsewhere = ChildStopAssignment::where('route_id', '!=', $route->id)
+            ->where('direction', 'Morning')->firstOrFail();
+        $child = $elsewhere->child;
+
+        $this->actingAs($this->admin)
+            ->post("/children/{$child->id}/assign", [
+                'route_id' => $route->id,
+                'morning_stop_id' => $stop->id,
+            ])
+            ->assertRedirect();
+
+        $rows = ChildStopAssignment::where('child_id', $child->id)->get();
+
+        // One row per direction — never a second morning row alongside the old.
+        $this->assertSame(1, $rows->where('direction', 'Morning')->count());
+        $this->assertSame($route->id, $rows->firstWhere('direction', 'Morning')->route_id);
+
+        // The afternoon leg follows when it was not named separately.
+        $this->assertSame($stop->id, $rows->firstWhere('direction', 'Afternoon')->stop_id);
     }
 
     /** Editing a stop moves the pin the whole trip is solved against. */

@@ -161,6 +161,110 @@
   </div>
 
   <div>
+    {{-- ----------------------------------------------------------------
+         ⚠ WHO IS ON THIS ROUTE.
+
+         The stop sequence has shown a rider COUNT since it was written, and a
+         number was as far as it went. Assignment lived only on the child's own
+         record — fine when onboarding one pupil, useless for the question a
+         transport office actually asks: "who is on RT-03?", asked when a route
+         fills up, a bus is swapped, or a kerb becomes unsafe and a stop moves.
+
+         Posts to the child's existing assign endpoint rather than growing a
+         second write path — `syncStopAssignment` already handles both
+         directions and the effective-from date, and two routes into one table
+         is how the two drift apart.
+    ---------------------------------------------------------------- --}}
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head"><h2>Students on this route</h2><span class="spacer"></span>
+        <span class="hint">{{ $riders->flatten()->count() }} riding</span></div>
+      <div class="card-body tight">
+
+        @forelse($route->stops as $s)
+          @php $at = $riders[$s->id] ?? collect(); @endphp
+          <div style="padding:10px 0;border-bottom:1px solid #F0F0F0">
+            <div style="font-weight:650;font-size:13px">
+              {{ $s->sequence }}. {{ $s->name }}
+              <span class="hint" style="font-weight:500">
+                · {{ $at->count() }} {{ $at->count() === 1 ? 'student' : 'students' }}</span>
+            </div>
+
+            @foreach($at as $a)
+              @php $pmStop = $afternoon[$a->child_id] ?? null; @endphp
+              <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+                <a href="{{ route('children.show', $a->child) }}"
+                   style="font-weight:600">{{ $a->child->name }}</a>
+                <span class="muted" style="font-size:12px">{{ $a->child->grade }}</span>
+                {{-- Only worth saying when it is not the obvious answer. --}}
+                @if($pmStop && $pmStop !== $s->id)
+                  <span class="pill warn" style="font-size:10.5px">
+                    drops at {{ $stopNames[$pmStop] ?? 'another stop' }}</span>
+                @endif
+                <span class="spacer"></span>
+                <a class="btn sm" href="{{ route('children.show', $a->child) }}#stop">Move</a>
+              </div>
+            @endforeach
+          </div>
+        @empty
+          <div class="muted" style="padding:10px 0">This route has no stops yet.</div>
+        @endforelse
+
+        @if($riders->flatten()->isEmpty() && $route->stops->isNotEmpty())
+          <div class="muted" style="padding:12px 0">
+            No students assigned to this route yet.
+          </div>
+        @endif
+
+        {{-- ---------- assign one ---------- --}}
+        @if($route->stops->isNotEmpty())
+          <details style="margin-top:14px">
+            <summary style="cursor:pointer;font-weight:650">Assign a student to this route</summary>
+            <form method="POST" action="" style="margin-top:10px;padding:10px;background:#FAFBFC;border-radius:8px"
+                  id="assignForm">
+              @csrf
+              <div class="field"><label>Student</label>
+                <select class="input" name="__child" required
+                        onchange="document.getElementById('assignForm').action =
+                                  '{{ url('children') }}/' + this.value + '/assign'">
+                  <option value="">Choose a student…</option>
+                  @foreach($assignable as $c)
+                    <option value="{{ $c->id }}">
+                      {{ $c->name }} — {{ $c->grade }}{{ $c->admission_no ? ' · ' . $c->admission_no : '' }}</option>
+                  @endforeach
+                </select>
+                {{-- ⚠ Children already on another route are listed on purpose:
+                     moving one IS the operation, and the assign endpoint
+                     replaces the existing row rather than adding a second. --}}
+                <div class="hint">A student already on another route will be moved to this one.</div>
+              </div>
+
+              <input type="hidden" name="route_id" value="{{ $route->id }}">
+
+              <div class="field"><label>Morning stop</label>
+                <select class="input" name="morning_stop_id" required>
+                  @foreach($route->stops as $s)
+                    <option value="{{ $s->id }}">{{ $s->sequence }}. {{ $s->name }}</option>
+                  @endforeach
+                </select></div>
+
+              <div class="field"><label>Afternoon stop</label>
+                <select class="input" name="afternoon_stop_id">
+                  <option value="">Same as the morning stop</option>
+                  @foreach($route->stops as $s)
+                    <option value="{{ $s->id }}">{{ $s->sequence }}. {{ $s->name }}</option>
+                  @endforeach
+                </select></div>
+
+              <button class="btn" type="submit">Assign to {{ $route->code }}</button>
+              <div class="hint" style="margin-top:8px">
+                Trips already generated keep the roster they were solved with.
+              </div>
+            </form>
+          </details>
+        @endif
+      </div>
+    </div>
+
     {{-- ---------- Default crew ---------- --}}
     <div class="card" style="margin-bottom:16px">
       <div class="card-head"><h2>Default crew</h2><span class="spacer"></span>

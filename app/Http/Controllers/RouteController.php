@@ -80,8 +80,38 @@ class RouteController extends Controller
 
         $school = $this->activeSchool();
 
+        // ⚠ WHO, not just how many. The stop sequence has carried a rider COUNT
+        // since it was written, and a number is exactly as far as it went: no
+        // way to see which children stand at that kerb, and no way to move one.
+        // Assignment existed only from the child's own record, which is the
+        // wrong way round when the question is "who is on RT-03?" — the
+        // question a transport office asks when a route fills up, a bus is
+        // swapped, or a stop is moved.
+        $riders = ChildStopAssignment::with('child')
+            ->where('route_id', $route->id)
+            ->where('direction', 'Morning')
+            ->get()
+            ->filter(fn ($a) => $a->child && $a->child->status === 'active')
+            ->groupBy('stop_id');
+
+        // The afternoon leg, only where it differs — a child dropped at a
+        // different kerb from the one they board at is the case somebody needs
+        // to see, and the common case is silence.
+        $afternoon = ChildStopAssignment::where('route_id', $route->id)
+            ->where('direction', 'Afternoon')
+            ->pluck('stop_id', 'child_id');
+
         return $this->view('routes.show', [
             'route'      => $route,
+            'riders'     => $riders,
+            'afternoon'  => $afternoon,
+            'stopNames'  => $route->stops->pluck('name', 'id'),
+            // Every active child at this school, for the assign control. A child
+            // already on another route is INCLUDED deliberately: moving one is
+            // the operation, and hiding them would make it impossible.
+            'assignable' => $school->children()
+                              ->where('status', 'active')
+                              ->orderBy('name')->get(['id', 'name', 'grade', 'admission_no']),
             'stopCounts' => ChildStopAssignment::where('route_id', $route->id)
                               ->where('direction', 'Morning')
                               ->selectRaw('stop_id, COUNT(*) as c')
